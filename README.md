@@ -1,2 +1,205 @@
-# bones
-GLSL ubershader post‑processing pipeline
+# Bones – A Rust Ubershader Post‑FX Tool for Linux (OpenGL/Vulkan)
+
+Bones is a realtime post‑processing overlay for Linux games, written in Rust. It intercepts OpenGL and Vulkan swap buffers, applies a single pass ubershader with a wide range of effects, and then presents the modified frame. The tool is designed for **performance** and **simplicity**; no custom LUTs, no external shader loading, no custom values, and no ping pong. All effects are combined into one shader pass, making memory usage O(1) regardless of how many effects are enabled.
+
+> [!WARNING]
+> **This project is provided “as is” without official support.** It is a personal tool that I open‑sourced because it might be useful to others. Use it at your own risk. Bug reports and pull requests are welcome, but please understand that development happens in my free time.
+
+## Table of Contents
+
+- [How It Works](#how-it-works)
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [Profiles](#profiles)
+  - [Configuration](#configuration)
+  - [Hot Reload](#hot-reload)
+- [Effect Categories](#effect-categories)
+- [Performance & Limitations](#performance--limitations)
+- [Building from Source](#building-from-source)
+- [Credits & License](#credits--license)
+
+## How It Works
+
+Bones uses `LD_PRELOAD` to hook `glXSwapBuffers` (GLX) and `eglSwapBuffers` (EGL) functions. When an application swaps a frame, Bones:
+
+1. Reads the current framebuffer as a texture.
+2. Runs a single **ubershader** that combines all enabled effects.
+3. Optionally reads a history texture for temporal effects.
+4. Writes the result back to the framebuffer.
+
+Unlike traditional reshade pipelines that chain multiple shader passes (ping‑pong between FBOs), Bones **never uses more than one draw call**. All effects are compiled into one large shader with `#ifdef` guards. This keeps VRAM usage constant and avoids the overhead of multiple passes.
+
+Because effects are executed in a fixed order (UV warp → spatial → temporal → inline → colour grading), some combinations may produce unexpected results if you enable two effects from the same category (e.g., two different tonemappers). **For best results, enable only one effect per category, unless they are intended to be used together.**
+
+## Features
+
+- **118 built‑in effects** – from geometric warps (mirror, rotate, lens distortion) to anti‑aliasing (FXAA, SMAA‑style), sharpening (CAS, RCAS), temporal smoothing (TAA, optical flow, variance accumulation), bloom, film grain, CRT/OLED/VHS simulation, colour grading, and even colour blindness simulation/correction.
+- **Ubershader architecture** – all effects are compiled into a single shader. Enabling an effect simply toggles a `#define`.
+- **Hot reload** – edit your configuration TOML file while the game is running and the shader recompiles automatically (if `hot_reload = true`).
+- **Temporal effects** – many temporal smoothing modes, including motion‑compensated accumulation inspired by DLSS/FSR/XeSS research.
+- **Performance‑first** – no custom LUT loading, no external shader scripts, no ping pong rendering. Everything is O(1) in VRAM and draw calls.
+- **Cross‑API** – works with both OpenGL (GLX) and Vulkan (EGL) applications.
+
+## Installation
+
+### Pre‑built binaries (if available)
+
+Download the latest release from the [Releases](../../releases) page. Then:
+
+- Extract it
+- Open a terminal inside and run:
+```
+sudo make install
+```
+
+### Building from source
+
+```bash
+git clone https://github.com/pythonlover02/bones.git
+cd bones
+```
+
+Build the 64‑bit version (the default):
+```bash
+make
+```
+
+Optionally build a 32‑bit version (requires `rustup`, `cmake`, `python`, `git`):
+```bash
+make build-32
+```
+
+You can build both with:
+```bash
+make build-all
+```
+
+Then install (as root) using:
+```bash
+sudo make install
+```
+
+The build produces `libbones.so` (64‑bit and, if built, 32‑bit) and the launcher binary `bones`.
+By default files are installed to `/usr/local/bin/bones` and `/usr/local/lib/libbones.so`.
+To change the installation prefix or directory use `PREFIX` and `DESTDIR`:
+
+```bash
+sudo make install PREFIX=/opt/bones DESTDIR=./package
+```
+
+To uninstall:
+```bash
+sudo make remove
+```
+
+### Setup for use with any game/application
+
+Bones is a launcher that injects the overlay. Use it like:
+
+```bash
+bones [PROFILE] -- YOUR_COMMAND [ARGS...]
+```
+
+For example:
+
+```bash
+bones -- glxgears
+bones myprofile -- steam -applaunch 730   # CS:GO/CS2
+```
+
+The launcher:
+- Writes a default configuration to `~/.config/bones/` if none exists.
+- Sets the environment variables `LD_PRELOAD`, `VK_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to hook into the child process.
+
+## Usage
+
+### Profiles
+
+A profile is a named configuration stored in `~/.config/bones/<name>-config.toml`.
+The default profile is `bones` (file `bones-config.toml`).
+
+```bash
+bones retro -- ~/games/retro-game
+```
+
+### Configuration
+
+Example `~/.config/bones/bones-config.toml`:
+
+```toml
+[general]
+hot_reload = true
+
+[geometric]
+mirror_horizontal = true
+
+[anti_aliasing]
+subpixel_aa = true
+
+[sharpening]
+contrast_adaptive_sharpen = true
+
+[temporal]
+surface_disocclusion_guard = true   # works alongside any temporal mode
+convergent_accumulate = true        # primary temporal mode
+
+[color_grading]
+vibrance_boost = true
+```
+
+All effects are listed in the default config file. Set them to `true` or `false`.
+
+### Hot Reload
+
+When `hot_reload = true`, Bones uses `inotify` to watch the config directory. Save your changes – the shader recompiles and reloads without restarting the game.
+
+## Effect Categories
+
+Effects are processed in this order (see the TOML file for full lists):
+
+1. **Geometric** – UV coordinate warps (mirror, rotate, distortion, sharp bilinear)
+2. **Denoise** – Bilateral denoise
+3. **Anti‑aliasing** – FXAA, NFAA, morphological, subpixel (pick **one**)
+4. **Sharpening** – CAS, RCAS, edge‑directed, etc. (can combine with midtone clarity)
+5. **Local contrast** – Single effect
+6. **Blur** – Gaussian, box, bokeh, tilt‑shift, radial
+7. **Image quality** – Deband, bloom, ghost flare
+8. **Display simulation** – CRT, phosphor, OLED, VHS, LCD subpixel
+9. **Overlay** – FPS HUD, crosshair
+10. **Temporal** – Many modes (TAA, motion gated, shutter angle, optical flow, convergent accumulation, variance flow, edge reconstruct, etc.) – pick **one** primary mode, optionally with `surface_disocclusion_guard` and/or `convergent_detail_recovery`
+11. **Inline** – Grain, chromatic aberration, halation, vignette, letterbox, dither
+12. **Exposure** – Linear exposure multiplier
+13. **Tonemapping** – ACES, AgX, Reinhard, Hable, etc. – pick **one**
+14. **White balance** – Neutral, warm, cool
+15. **Colour grading** – Saturation/contrast, levels, gamma, vibrance, HSL, split tone, lift/gamma/gain, Hermite curves
+16. **Channel curves** – Per‑channel s‑curve
+17. **Colour balance** – Tri‑zone (teal/orange)
+18. **Selective colour** – Boost saturation per dominant channel
+19. **Stylization** – Dynamic range crush, duotone, wash, posterize, bleach bypass, Technicolor, invert, grayscale
+20. **Accessibility** – Colour blindness simulation & correction (protanopia, deuteranopia, tritanopia)
+
+> [!IMPORTANT]
+> **Enable at most one effect per category, unless specified otherwise.**
+> For example, do not enable two different tonemappers or two different anti‑aliasing methods. Some combinations (e.g., sharpener + midtone clarity) are safe and intended.
+
+## Performance & Limitations
+
+- **VRAM**: O(1) – only two textures (current frame + optional history).
+- **Draw calls**: Always 1 full‑screen triangle.
+- **CPU overhead**: Minimal; the launcher only sets up hooks and reloads the config.
+- **Limitations**:
+  - No custom shaders or LUTs – you cannot load external `.fx` files or PNG LUTs.
+  - No multi‑pass effects (e.g., advanced bloom with downsample chains).
+  - Effects that depend on per‑object motion vectors (like true DLSS) are approximated by optical flow from neighbour pixels.
+  - Some temporal modes may cause ghosting if motion is too fast; use `surface_disocclusion_guard` to reduce it.
+
+Because the ubershader combines all effects into one code block, some effects may interfere with each other if not designed to be layered. The order is fixed and cannot be changed at runtime.
+
+## Credits & License
+
+The project is heavily inspired by existing reshade tools, but the ubershader implementation and the majority of the effect code were written from scratch (or ported from GLSL snippets found in public domain and open‑source shader repositories).
+
+All 118 effect implementations are original or derived from well‑known algorithms (FXAA by Timothy Lottes, CAS/RCAS from AMD GPUOpen, etc.) and are used under the terms of their respective licenses (mostly MIT/BSD). The overall project is released under the **GNU General Public License v3.0**.
+
+Full text of the GPLv3 is available in the [LICENSE](LICENSE) file.

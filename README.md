@@ -21,12 +21,17 @@ Bones is a realtime post‑processing overlay for Linux games, written in Rust. 
 
 ## How It Works
 
-Bones uses `LD_PRELOAD` to hook `glXSwapBuffers` (GLX) and `eglSwapBuffers` (EGL) functions. When an application swaps a frame, Bones:
+Bones has two interception paths that work simultaneously:
 
-1. Reads the current framebuffer as a texture.
-2. Runs a single **ubershader** that combines all enabled effects.
-3. Optionally reads a history texture for temporal effects.
-4. Writes the result back to the framebuffer.
+- **OpenGL** – uses `LD_PRELOAD` to hook `glXSwapBuffers` (GLX) and `eglSwapBuffers` (EGL). Before the real swap, Bones copies the default framebuffer into a texture, draws a full‑screen triangle with the ubershader, and writes the result back.
+- **Vulkan** – registers as an implicit Vulkan layer (`VK_LAYER_BONES_overlay`). At `vkQueuePresentKHR`, the layer copies the swapchain image into an offscreen texture, renders the ubershader into a second offscreen image, and copies the result back to the swapchain image before presentation.
+
+In both paths the pipeline is the same:
+
+1. Copy the current frame into an input texture.
+2. Run a single **ubershader** that combines all enabled effects.
+3. Optionally read a history texture for temporal effects.
+4. Write the result back and copy it into the history texture for the next frame.
 
 Unlike traditional reshade pipelines that chain multiple shader passes (ping‑pong between FBOs), Bones **never uses more than one draw call**. All effects are compiled into one large shader with `#ifdef` guards. This keeps VRAM usage constant and avoids the overhead of multiple passes.
 
@@ -39,7 +44,7 @@ Because effects are executed in a fixed order (UV warp → spatial → temporal 
 - **Hot reload** – edit your configuration TOML file while the game is running and the shader recompiles automatically (if `hot_reload = true`).
 - **Temporal effects** – many temporal smoothing modes, including motion‑compensated accumulation inspired by DLSS/FSR/XeSS research.
 - **Performance‑first** – no custom LUT loading, no external shader scripts, no ping pong rendering. Everything is O(1) in VRAM and draw calls.
-- **Cross‑API** – works with both OpenGL (GLX) and Vulkan (EGL) applications.
+- **Cross‑API** – works with OpenGL (GLX/EGL) and Vulkan applications.
 
 ## Installation
 
@@ -185,7 +190,7 @@ Effects are processed in this order (see the TOML file for full lists):
 
 ## Performance & Limitations
 
-- **VRAM**: O(1) – only two textures (current frame + optional history).
+- **VRAM**: O(1) – only three textures (input, output, history) regardless of how many effects are enabled.
 - **Draw calls**: Always 1 full‑screen triangle.
 - **CPU overhead**: Minimal; the launcher only sets up hooks and reloads the config.
 - **Limitations**:

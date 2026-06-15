@@ -1,0 +1,503 @@
+bones — GLSL ubershader post‑processing pipeline
+Copyright (C) 2026 pythonlover02
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+=======================================================================
+
+The bones shader pack contains original GLSL implementations of many
+well‑known computer graphics algorithms.  The following sections list
+the research papers, open‑source projects, and public domain techniques
+that inspired or are directly used by bones.  Where source code has been
+adapted, the original license is reproduced below.  All modifications
+made for the bones project are released under the GPL‑3.0‑or‑later
+license stated above; the algorithm descriptions and original works
+remain the intellectual property of their respective authors.
+
+=======================================================================
+GEOMETRIC (UV WARP)
+=======================================================================
+
+polynomial_distort / barrel_undistort
+  Based on the Brown‑Conrady lens distortion model (radial distortion
+  coefficients k1, k2), widely used in OpenCV and camera calibration.
+
+fisheye_warp
+  Employs an atan remapping to simulate a fisheye lens projection.
+
+sharp_bilinear
+  Pixel‑art upscaling using Hermite smoothstep UV snapping.
+  Technique is a common shader idiom.
+
+=======================================================================
+DENOISE
+=======================================================================
+
+bilateral_denoise
+  Spatial bilateral filter after Tomasi & Manduchi (1998),
+  “Bilateral Filtering for Gray and Color Images”.
+
+=======================================================================
+ANTI‑ALIASING
+=======================================================================
+
+luma_edge_aa (FXAA)
+  Based on “FXAA – Fast Approximate Anti‑Aliasing” by Timothy Lottes
+  (NVIDIA).  The reference implementation is distributed under the
+  permissive “FXAA 3.11” license (included below).
+
+normal_filter_aa (NFAA)
+  Normal Filter Anti‑Aliasing – computes gradient perpendicular to edges
+  and blends along the tangent. Lightweight, public‑domain technique.
+
+morphological_aa (CMAA)
+  Inspired by Intel’s Conservative Morphological Anti‑Aliasing (CMAA).
+  Original CMAA is distributed under the Apache License 2.0.
+
+subpixel_aa (SMAA)
+  Based on “SMAA: Enhanced Subpixel Morphological Antialiasing”
+  by Jorge Jimenez, Jose I. Echevarria, Tiago Sousa, Diego Gutierrez
+  (2012).  Reference implementation distributed under the MIT license.
+
+=======================================================================
+SHARPENING / LOCAL CONTRAST
+=======================================================================
+
+contrast_adaptive_sharpen (CAS)
+  Derived from AMD FidelityFX CAS.
+  Distributed under the MIT license (see below).
+
+robust_contrast_sharpen (RCAS)
+  Derived from AMD FidelityFX FSR 1.0 (RCAS).
+  Distributed under the MIT license.
+
+edge_directed_sharpen (NIS)
+  Based on NVIDIA Image Scaling (NIS) edge‑aware sharpening.
+  Distributed under the MIT license.
+
+laplacian_sharpen
+  Classic Laplacian sharpening kernel.
+
+luminance_sharpen
+  Luminance‑only sharpening, akin to Lightroom’s Lab‑space sharpening.
+
+midtone_clarity
+  Midtone local contrast enhancement inspired by Photoshop “Clarity”.
+
+falloff_sharpen / power_curve_sharpen
+  Adaptive sharpening with inverse falloff or power‑curve response.
+
+unsharp_mask
+  Traditional photographic unsharp mask using a weighted 3×3 kernel.
+
+local_contrast
+  Per‑pixel contrast based on luminance ratio to neighborhood average;
+  similar to DaVinci Resolve’s local contrast.
+
+=======================================================================
+TONEMAPPING
+=======================================================================
+
+aces_tonemap
+  Algebraic fit by Krzysztof Narkowicz (2015) of the ACES
+  (Academy Color Encoding System) filmic curve.
+  ACES is developed by the Academy of Motion Picture Arts and Sciences.
+
+agx_tonemap
+  AgX sigmoid tone mapper created by Troy Sobotka for Blender.
+  Blender’s AgX implementation is released under the GNU GPL.
+
+reinhard_tonemap
+  Reinhard et al. (2002), “Photographic Tone Reproduction for
+  Digital Images”.
+
+hable_tonemap
+  John Hable (2010), “Uncharted 2: HDR Lighting”, GDC 2010.
+  Constants from the public presentation.
+
+lottes_tonemap
+  Timothy Lottes (2016), “Advanced Techniques and Optimization
+  of HDR Color Pipelines”.
+
+uchimura_tonemap
+  Hajime Uchimura (2017), CEDEC 2017, Gran Turismo tone mapping.
+  Constants from the public presentation.
+
+tony_tonemap (Tony McMapface)
+  Simple offset‑scale highlight rolloff.
+
+khronos_tonemap
+  Khronos Group PBR Neutral tone mapper, specified in the
+  glTF 2.0 specification.
+
+=======================================================================
+WHITE BALANCE
+=======================================================================
+
+neutral_white_balance
+  Chromatic adaptation to CIE D65 white point (sRGB / Rec.709 standard).
+
+warm_temperature / cool_temperature
+  Simple channel multipliers for warm or cool colour shift.
+
+=======================================================================
+COLOUR GRADING
+=======================================================================
+
+saturation_contrast_grade
+  Combined saturation, contrast, and brightness adjustment.
+
+levels_remap
+  Input/output black‑white remapping as in Photoshop Levels.
+
+gamma_correct
+  Power‑law gamma adjustment.
+
+vibrance_boost
+  Smart saturation boost (Lightroom “Vibrance” algorithm).
+
+hsl_transform
+  Hue, saturation, lightness adjustment in HSL colour space.
+
+split_tone
+  Split‑toning with cool shadows and warm highlights (cinematic look).
+
+lift_gamma_gain
+  Three‑way colour corrector (lift, gamma, gain) as in DaVinci Resolve.
+
+hermite_curves
+  S‑curve contrast via Hermite smoothstep.
+
+=======================================================================
+CHANNEL CURVES
+=======================================================================
+
+red_channel_curve / green_channel_curve / blue_channel_curve
+  Per‑channel Hermite S‑curve for fine colour control.
+
+=======================================================================
+COLOUR BALANCE
+=======================================================================
+
+trizone_color_balance
+  Three‑zone (shadow, midtone, highlight) colour tint;
+  same concept as DaVinci Resolve colour wheels.
+
+=======================================================================
+SELECTIVE COLOUR
+=======================================================================
+
+red_selective_saturate / green_selective_saturate / blue_selective_saturate
+  Boost saturation of pixels whose dominant channel matches a specific colour.
+
+=======================================================================
+STYLIZATION
+=======================================================================
+
+dynamic_range_crush
+  Clamp black and white points and re‑expand; “Instagram filter” look.
+
+duotone_map
+  Luminance‑driven blend between two colours (Spotify cover style).
+
+color_wash_tint
+  Subtle overall colour tint.
+
+posterize_quantize
+  Reduce colour levels (Photoshop Posterize).
+
+bleach_bypass
+  Desaturated high‑contrast look simulating bleach bypass film process
+  (e.g., Saving Private Ryan). Uses overlay blend.
+
+technicolor_process
+  Vintage three‑strip Technicolor cross‑channel simulation.
+
+midpoint_contrast
+  Simple contrast boost by scaling distance from 0.5.
+
+color_invert
+  Photographic negative.
+
+luminance_grayscale
+  BT.709 luminance weights for perceptually correct grayscale.
+
+=======================================================================
+ACCESSIBILITY
+=======================================================================
+
+protanopia_simulate / deuteranopia_simulate / tritanopia_simulate
+  Colour vision deficiency simulation using 3×3 transformation matrices.
+
+protanopia_correct / deuteranopia_correct / tritanopia_correct
+  Daltonization (correction) for red, green, or blue cone deficiencies.
+
+=======================================================================
+DISPLAY SIMULATION
+=======================================================================
+
+crt_simulation
+  Full CRT TV simulation: barrel distortion, RGB phosphor mask,
+  scanlines, brightness compensation.
+
+phosphor_amber / phosphor_green / phosphor_red
+  Monochrome phosphor CRT emulation (amber, green, red).
+
+scanline_darken
+  Horizontal scanline darkening only.
+
+oled_simulation
+  OLED near‑black crush and saturation boost.
+
+vhs_simulation
+  VHS tape degradation: horizontal jitter, chroma separation,
+  luma noise, vertical ripple.
+
+lcd_subpixel
+  Visible LCD subpixel grid overlay.
+
+=======================================================================
+IMAGE QUALITY
+=======================================================================
+
+gradient_deband
+  Sampling‑based debanding inspired by mpv’s deband filter.
+
+threshold_bloom
+  Bright pixel glow via threshold and neighbourhood accumulation.
+
+ghost_flare
+  Lens flare ghost simulation – sampling along the vector from screen
+  centre to pixel.
+
+=======================================================================
+TEMPORAL PROCESSING
+=======================================================================
+
+neighborhood_clamp_aa (TAA clamp)
+  Based on the temporal anti‑aliasing technique described in
+  “High‑Quality Temporal Supersampling” by Brian Karis (SIGGRAPH 2014)
+  and “Filmic SMAA” by Jorge Jimenez (GDC 2016).
+
+motion_reject_denoise
+  Motion‑gated accumulation: heavily blend static pixels, snap on motion.
+
+motion_detect_blur
+  Motion‑blur by blending toward history proportional to per‑pixel change.
+
+constant_blend_smooth
+  Simple 50/50 temporal blend.
+
+shutter_angle_smooth
+  Physical camera shutter simulation (180° shutter angle).
+
+spline_interp_smooth
+  Catmull‑Rom spline temporal interpolation:
+  E. Catmull and R. Rom (1974), “A Class of Local Interpolating Splines”.
+
+variance_decay_smooth
+  Exponential IIR filter with variance‑based decay.
+
+dualrate_smooth
+  Dual‑rate adaptive filter (high blend for still areas, low for edges).
+
+luminance_gate_smooth
+  Luminance‑adaptive blending – more smoothing in dark regions.
+
+contrast_gate_smooth
+  Contrast‑adaptive blending based on local contrast magnitude.
+
+gradient_gate_smooth
+  Edge‑aware temporal blending using Sobel‑like gradient.
+
+sigma_clip_smooth
+  Variance clipping: history clamped to mean ± sigma of 3×3 neighbourhood.
+  Described by Salvi (2016) as the core of modern TAA.
+
+mitchell_kernel_smooth
+  Mitchell‑Netravali spatial reconstruction combined with temporal blend:
+  Don P. Mitchell and Arun N. Netravali (1988), “Reconstruction Filters
+  in Computer Graphics”.
+
+ycocg_clip_smooth
+  YCoCg colour‑space AABB clamp with confidence weighting.
+  Derived from AMD GPUOpen temporal stabilisation samples.
+  (MIT license)
+
+bilateral_history_smooth
+  Bilateral temporal filter comparing neighbourhood averages of current
+  and history frames.
+
+perceptual_chroma_smooth
+  YCbCr temporal blend with higher blend weight on chroma,
+  exploiting human vision’s lower chroma temporal resolution.
+
+frequency_split_smooth
+  Decompose into low/high frequency bands with separate blend weights.
+
+horn_schunck_smooth
+  Implements the Horn‑Schunck optical flow algorithm:
+  B. K. P. Horn and B. G. Schunck (1981), “Determining Optical Flow”.
+
+convergent_accumulate
+  Convergent temporal supersampling – gradually increases blend weight
+  as pixel stability increases, inspired by DLSS temporal accumulation.
+
+dualwarp_flow_smooth
+  Dual‑warp frame interpolation with flow consistency checking.
+  Inspired by AMD FidelityFX Frame Interpolation (part of FSR 3).
+  (MIT license)
+
+variance_flow_accumulate
+  Motion‑compensated temporal accumulation with variance clipping and
+  triple confidence gating. Based on the temporal supersampling papers
+  by Brian Karis (SIGGRAPH 2014) and Jorge Jimenez (GDC 2016).
+
+edge_reconstruct_smooth
+  Edge‑directed temporal reconstruction with directional spatial
+  reconstruction along edges, inspired by Intel XeSS DP4a fallback path.
+  Original XeSS is under the Intel Simplified Software License
+  (BSD‑like); bones uses only the described algorithm.
+
+surface_disocclusion_guard
+  History rejection for disocclusion; similar to the disocclusion
+  handling in FSR 2 and DLSS 2.
+
+convergent_detail_recovery
+  Temporal sharpening – pulls the current frame toward the converged
+  history representation, unique to bones.
+
+=======================================================================
+INLINE EFFECTS
+=======================================================================
+
+gaussian_grain
+  Film grain using the Box‑Muller transform to generate Gaussian noise.
+
+chromatic_aberration
+  Lateral chromatic aberration by shifting red and blue channels.
+
+red_halation
+  Red halation glow – bright areas add red channel boost,
+  simulating film halation.
+
+anamorphic_streak
+  Horizontal streak flare simulating anamorphic lens flare.
+
+radial_vignette
+  Radial darkened edges with smoothstep falloff.
+
+cinematic_letterbox
+  2.35:1 widescreen letterbox bars.
+
+ordered_dither
+  Bayer 4×4 ordered dither pattern (Bayer, 1973).
+
+=======================================================================
+EXTERNAL LICENSES FOR REFERENCE IMPLEMENTATIONS
+=======================================================================
+
+--- FXAA 3.11 License (Timothy Lottes, NVIDIA) ---
+
+Copyright (c) 2011‑2021 Timothy Lottes
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+--- AMD FidelityFX MIT License ---
+
+Copyright (c) 2019‑2023 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+--- NVIDIA Image Scaling MIT License ---
+
+Copyright (c) 2021 NVIDIA Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+--- SMAA (Enhanced Subpixel Morphological Antialiasing) MIT License ---
+
+Copyright (c) 2011‑2021 Jorge Jimenez
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+=======================================================================
+
+The bones project is an independent, open‑source post‑processing
+pipeline.  Any code not explicitly attributed above is original to the
+bones author and is provided under the GPL‑3.0‑or‑later license.

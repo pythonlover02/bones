@@ -24,6 +24,7 @@ enum LineClass {
     UniformResolution,
     UniformTime,
     UniformFps,
+    FragOut,
     Other,
 }
 
@@ -50,6 +51,7 @@ fn classify(line: &str) -> LineClass {
         "uniform vec2 u_resolution;" => LineClass::UniformResolution,
         "uniform float u_time;" => LineClass::UniformTime,
         "uniform float u_fps;" => LineClass::UniformFps,
+        "out vec4 frag_out;" => LineClass::FragOut,
         _ => LineClass::Other,
     }
 }
@@ -62,7 +64,8 @@ fn rewrite_line(line: &str) -> String {
         LineClass::UniformResolution => String::new(),
         LineClass::UniformTime => String::new(),
         LineClass::UniformFps => String::new(),
-        LineClass::Other => line.replace("texture2D(", "texture(").replace("gl_FragColor", "frag_out"),
+        LineClass::FragOut => String::new(),
+        LineClass::Other => line.into(),
     }
 }
 

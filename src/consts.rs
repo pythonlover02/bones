@@ -1,6 +1,11 @@
 pub(crate) const LAYER_NAME: &str = "VK_LAYER_BONES_overlay";
 pub(crate) const LAYER_DESC: &str = "Bones -> Linux GL/Vulkan shader post-FX";
 
+pub(crate) const FLATPAK_CMD: &str = "flatpak";
+pub(crate) const FLATPAK_RUN: &str = "run";
+pub(crate) const FLATPAK_INJECT_ABS: &str = "/usr/lib/extensions/vulkan/bones/bin/bones-inject";
+pub(crate) const FLATPAK_METADATA_KEY: &str = "command=";
+
 pub(crate) const LOG_FD: i32 = 2;
 pub(crate) const US_PER_S: f32 = 1_000_000.0;
 pub(crate) const MAX_FPS_REPORT: f32 = 9999.0;
@@ -986,10 +991,10 @@ pub(crate) const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
 pub(crate) const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
 pub(crate) const GL_TEXTURE_WRAP_S: u32 = 0x2802;
 pub(crate) const GL_TEXTURE_WRAP_T: u32 = 0x2803;
-pub(crate) const GL_FRAMEBUFFER_EXT: u32 = 0x8D40;
-pub(crate) const GL_READ_FRAMEBUFFER_EXT: u32 = 0x8CA8;
-pub(crate) const GL_DRAW_FRAMEBUFFER_EXT: u32 = 0x8CA9;
-pub(crate) const GL_COLOR_ATTACHMENT0_EXT: u32 = 0x8CE0;
+pub(crate) const GL_FRAMEBUFFER: u32 = 0x8D40;
+pub(crate) const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
+pub(crate) const GL_DRAW_FRAMEBUFFER: u32 = 0x8CA9;
+pub(crate) const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
 pub(crate) const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
 pub(crate) const GL_FRAGMENT_SHADER: u32 = 0x8B30;
 pub(crate) const GL_VERTEX_SHADER: u32 = 0x8B31;
@@ -1033,7 +1038,8 @@ pub(crate) const GL_COLOR_LOGIC_OP: u32 = 0x0BF2;
 pub(crate) const GL_VERTEX_PROGRAM_ARB: u32 = 0x8620;
 pub(crate) const GL_FRAGMENT_PROGRAM_ARB: u32 = 0x8804;
 pub(crate) const GL_VERTEX_ATTRIB_ARRAY_ENABLED: u32 = 0x8622;
-pub(crate) const GL_EXTENSIONS: u32 = 0x1F03;
+pub(crate) const GL_VERTEX_ARRAY_BINDING: u32 = 0x85B5;
+pub(crate) const GL_VERSION: u32 = 0x1F02;
 pub(crate) const GLX_WIDTH: i32 = 0x801D;
 pub(crate) const GLX_HEIGHT: i32 = 0x801E;
 pub(crate) const EGL_WIDTH: i32 = 0x3057;
@@ -1059,12 +1065,12 @@ void main() {
 }
 "#;
 
-pub(crate) const VERT_SRC: &str = r#"#version 120
-attribute vec2 a_pos;
+pub(crate) const VERT_SRC: &str = r#"#version 130
+in vec2 a_pos;
 void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
 "#;
 
-pub(crate) const UBER_SRC: &str = r#"#version 120
+pub(crate) const UBER_SRC: &str = r#"#version 130
 
 uniform sampler2D u_input;
 uniform sampler2D u_history;
@@ -1072,12 +1078,14 @@ uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_fps;
 
+out vec4 frag_out;
+
 const vec3 LUMA_BT601 = vec3(0.299, 0.587, 0.114);
 const vec3 LUMA_BT709 = vec3(0.2126, 0.7152, 0.0722);
 
 #ifdef ENABLE_CRT_SIMULATION
     vec3 crt_fetch_px(vec2 uv) {
-        return texture2D(u_input, uv).rgb;
+        return texture(u_input, uv).rgb;
     }
 #endif
 
@@ -1154,23 +1162,7 @@ const vec3 LUMA_BT709 = vec3(0.2126, 0.7152, 0.0722);
     );
 
     float dither_cell(float di) {
-        float v = bones_bayer4x4[0];
-        v = mix(v, bones_bayer4x4[1], step(0.5, di));
-        v = mix(v, bones_bayer4x4[2], step(1.5, di));
-        v = mix(v, bones_bayer4x4[3], step(2.5, di));
-        v = mix(v, bones_bayer4x4[4], step(3.5, di));
-        v = mix(v, bones_bayer4x4[5], step(4.5, di));
-        v = mix(v, bones_bayer4x4[6], step(5.5, di));
-        v = mix(v, bones_bayer4x4[7], step(6.5, di));
-        v = mix(v, bones_bayer4x4[8], step(7.5, di));
-        v = mix(v, bones_bayer4x4[9], step(8.5, di));
-        v = mix(v, bones_bayer4x4[10], step(9.5, di));
-        v = mix(v, bones_bayer4x4[11], step(10.5, di));
-        v = mix(v, bones_bayer4x4[12], step(11.5, di));
-        v = mix(v, bones_bayer4x4[13], step(12.5, di));
-        v = mix(v, bones_bayer4x4[14], step(13.5, di));
-        v = mix(v, bones_bayer4x4[15], step(14.5, di));
-        return v;
+        return bones_bayer4x4[int(di)];
     }
 #endif
 
@@ -1290,20 +1282,20 @@ void main() {
         }
     #endif
 
-    vec3 tap_0_0 = texture2D(u_input, v_uv).rgb;
+    vec3 tap_0_0 = texture(u_input, v_uv).rgb;
 
     #if defined(ENABLE_LUMA_EDGE_AA) || defined(ENABLE_NORMAL_FILTER_AA) || defined(ENABLE_MORPHOLOGICAL_AA) || defined(ENABLE_SUBPIXEL_AA) || defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_ROBUST_CONTRAST_SHARPEN) || defined(ENABLE_EDGE_DIRECTED_SHARPEN) || defined(ENABLE_LAPLACIAN_SHARPEN) || defined(ENABLE_LUMINANCE_SHARPEN) || defined(ENABLE_MIDTONE_CLARITY) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_POWER_CURVE_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_LOCAL_CONTRAST) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_THRESHOLD_BLOOM) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_SIGMA_CLIP_SMOOTH) || defined(ENABLE_DUALRATE_SMOOTH) || defined(ENABLE_HORN_SCHUNCK_SMOOTH) || defined(ENABLE_FREQUENCY_SPLIT_SMOOTH) || defined(ENABLE_GRADIENT_GATE_SMOOTH) || defined(ENABLE_BILATERAL_HISTORY_SMOOTH) || defined(ENABLE_CONTRAST_GATE_SMOOTH) || defined(ENABLE_DUALWARP_FLOW_SMOOTH) || defined(ENABLE_VARIANCE_FLOW_ACCUMULATE) || defined(ENABLE_EDGE_RECONSTRUCT_SMOOTH)
-        vec3 tap_1_0   = texture2D(u_input, v_uv + vec2( 1.0,  0.0) * inv).rgb;
-        vec3 tap_m1_0  = texture2D(u_input, v_uv + vec2(-1.0,  0.0) * inv).rgb;
-        vec3 tap_0_1   = texture2D(u_input, v_uv + vec2( 0.0,  1.0) * inv).rgb;
-        vec3 tap_0_m1  = texture2D(u_input, v_uv + vec2( 0.0, -1.0) * inv).rgb;
+        vec3 tap_1_0   = texture(u_input, v_uv + vec2( 1.0,  0.0) * inv).rgb;
+        vec3 tap_m1_0  = texture(u_input, v_uv + vec2(-1.0,  0.0) * inv).rgb;
+        vec3 tap_0_1   = texture(u_input, v_uv + vec2( 0.0,  1.0) * inv).rgb;
+        vec3 tap_0_m1  = texture(u_input, v_uv + vec2( 0.0, -1.0) * inv).rgb;
     #endif
 
     #if defined(ENABLE_LUMA_EDGE_AA) || defined(ENABLE_MORPHOLOGICAL_AA) || defined(ENABLE_SUBPIXEL_AA) || defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_THRESHOLD_BLOOM) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_SIGMA_CLIP_SMOOTH)
-        vec3 tap_1_1   = texture2D(u_input, v_uv + vec2( 1.0,  1.0) * inv).rgb;
-        vec3 tap_m1_1  = texture2D(u_input, v_uv + vec2(-1.0,  1.0) * inv).rgb;
-        vec3 tap_1_m1  = texture2D(u_input, v_uv + vec2( 1.0, -1.0) * inv).rgb;
-        vec3 tap_m1_m1 = texture2D(u_input, v_uv + vec2(-1.0, -1.0) * inv).rgb;
+        vec3 tap_1_1   = texture(u_input, v_uv + vec2( 1.0,  1.0) * inv).rgb;
+        vec3 tap_m1_1  = texture(u_input, v_uv + vec2(-1.0,  1.0) * inv).rgb;
+        vec3 tap_1_m1  = texture(u_input, v_uv + vec2( 1.0, -1.0) * inv).rgb;
+        vec3 tap_m1_m1 = texture(u_input, v_uv + vec2(-1.0, -1.0) * inv).rgb;
     #endif
 
     vec3 c = tap_0_0;
@@ -1321,7 +1313,7 @@ void main() {
             float dw = 1.0;
             for (int di = -1; di <= 1; di++) {
                 for (int dj = -1; dj <= 1; dj++) {
-                    vec3 dd = texture2D(u_input, v_uv + vec2(float(di), float(dj)) * dr * inv).rgb;
+                    vec3 dd = texture(u_input, v_uv + vec2(float(di), float(dj)) * dr * inv).rgb;
                     vec3 de = dd - c;
                     float dk = exp(-dot(de, de) / max(DS, 0.0001));
                     ds += dd * dk;
@@ -1352,10 +1344,10 @@ void main() {
             float fr = max((lnw + lne + lsw + lse) * RM * 0.25, RN);
             float fp = 1.0 / max(min(abs(fd.x), abs(fd.y)) + fr, 0.0001);
             fd = clamp(fd * fp, vec2(-SM), vec2(SM)) * inv;
-            vec3 fa = (texture2D(u_input, v_uv + fd * (1.0 / 3.0 - 0.5)).rgb +
-                       texture2D(u_input, v_uv + fd * (2.0 / 3.0 - 0.5)).rgb) * 0.5;
-            vec3 fb = fa * 0.5 + (texture2D(u_input, v_uv + fd * -0.5).rgb +
-                                  texture2D(u_input, v_uv + fd * 0.5).rgb) * 0.25;
+            vec3 fa = (texture(u_input, v_uv + fd * (1.0 / 3.0 - 0.5)).rgb +
+                       texture(u_input, v_uv + fd * (2.0 / 3.0 - 0.5)).rgb) * 0.5;
+            vec3 fb = fa * 0.5 + (texture(u_input, v_uv + fd * -0.5).rgb +
+                                  texture(u_input, v_uv + fd * 0.5).rgb) * 0.25;
             float fl = dot(fb, LUMA_BT601);
             c = mix(fb, fa, clamp(step(fl, fmn) + step(fmx, fl), 0.0, 1.0));
         }
@@ -1372,8 +1364,8 @@ void main() {
             float nd = (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b) / 3.0;
             vec2 ng = vec2(nw - ne, nn - nd);
             vec2 nt = vec2(-ng.y, ng.x) * ns * inv;
-            c = mix(c, (texture2D(u_input, v_uv + nt).rgb +
-                        texture2D(u_input, v_uv - nt).rgb + c) / 3.0,
+            c = mix(c, (texture(u_input, v_uv + nt).rgb +
+                        texture(u_input, v_uv - nt).rgb + c) / 3.0,
                     clamp(length(ng) * NN, 0.0, 1.0));
         }
     #endif
@@ -1551,7 +1543,7 @@ void main() {
             float bn = 0.0;
             for (int bi = -2; bi <= 2; bi++) {
                 for (int bj = -2; bj <= 2; bj++) {
-                    bs += texture2D(u_input, v_uv + vec2(float(bi), float(bj)) * br * inv).rgb;
+                    bs += texture(u_input, v_uv + vec2(float(bi), float(bj)) * br * inv).rgb;
                     bn += 1.0;
                 }
             }
@@ -1570,7 +1562,7 @@ void main() {
             float kn = 1.0;
             for (int ki = 0; ki < 8; ki++) {
                 float ka = float(ki) * KS;
-                vec3 kp = texture2D(u_input, v_uv + vec2(cos(ka), sin(ka)) * kr * inv).rgb;
+                vec3 kp = texture(u_input, v_uv + vec2(cos(ka), sin(ka)) * kr * inv).rgb;
                 float kw = 1.0 + dot(kp, vec3(1.0)) * KH;
                 ks += kp * kw;
                 kn += kw;
@@ -1591,8 +1583,8 @@ void main() {
             vec3 ts = c;
             float tn = 1.0;
             for (int ti = 1; ti <= 4; ti++) {
-                ts += texture2D(u_input, v_uv + vec2(float(ti), 0.0) * tr * td * inv).rgb;
-                ts += texture2D(u_input, v_uv - vec2(float(ti), 0.0) * tr * td * inv).rgb;
+                ts += texture(u_input, v_uv + vec2(float(ti), 0.0) * tr * td * inv).rgb;
+                ts += texture(u_input, v_uv - vec2(float(ti), 0.0) * tr * td * inv).rgb;
                 tn += 2.0;
             }
             c = mix(c, ts / tn, td * TS);
@@ -1606,7 +1598,7 @@ void main() {
             vec2 rd = (vec2(0.5) - v_uv) * RS2;
             vec3 rs = c;
             for (int ri = 1; ri <= 7; ri++) {
-                rs += texture2D(u_input, v_uv + rd * float(ri) / 7.0).rgb;
+                rs += texture(u_input, v_uv + rd * float(ri) / 7.0).rgb;
             }
             c = mix(c, rs / 8.0, RM);
         }
@@ -1621,7 +1613,7 @@ void main() {
             float dr = DR2 * res_scale;
             float dh = fract(sin(dot(v_uv, vec2(12.9898, 78.233)) + u_time * DA) * 43758.5453);
             float da = dh * 6.2831853;
-            vec3 ds = texture2D(u_input, v_uv + vec2(cos(da), sin(da)) * dr * inv).rgb;
+            vec3 ds = texture(u_input, v_uv + vec2(cos(da), sin(da)) * dr * inv).rgb;
             vec3 dd = abs(ds - c);
             float dm = step(max(dd.r, max(dd.g, dd.b)), DT);
             c = mix(c, (c + ds) * 0.5, dm * DS2);
@@ -1655,7 +1647,7 @@ void main() {
             vec2 gc = vec2(0.5) - v_uv;
             vec3 gg = vec3(0.0);
             for (int gi = 1; gi <= 3; gi++) {
-                vec3 gs = texture2D(u_input, v_uv + gc * GS * float(gi)).rgb;
+                vec3 gs = texture(u_input, v_uv + gc * GS * float(gi)).rgb;
                 gg += max(gs - vec3(GT), vec3(0.0));
             }
             c = c + gg * GI * (1.0 - clamp(length(gc) * GF, 0.0, 1.0));
@@ -1746,9 +1738,9 @@ void main() {
             float vr = sin(v_uv.y * VF + u_time * VS) * VR * vs * inv.x;
             vec2 vu = v_uv + vec2(vj + vr, 0.0);
             float vc = VC * vs * inv.x;
-            c = vec3(texture2D(u_input, vu + vec2(vc, 0.0)).r,
-                     texture2D(u_input, vu).g,
-                     texture2D(u_input, vu - vec2(vc, 0.0)).b);
+            c = vec3(texture(u_input, vu + vec2(vc, 0.0)).r,
+                     texture(u_input, vu).g,
+                     texture(u_input, vu - vec2(vc, 0.0)).b);
             float vn = fract(sin(dot(vu, vec2(12.9898, 78.233)) + u_time * VA) * 43758.5453) - 0.5;
             c = c + vec3(vn) * VN;
         }
@@ -1854,7 +1846,7 @@ void main() {
     #ifdef ENABLE_NEIGHBORHOOD_CLAMP_AA
         {
             const float TB = 0.1;
-            vec3 th = texture2D(u_history, v_uv).rgb;
+            vec3 th = texture(u_history, v_uv).rgb;
             vec3 tmn = min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1));
             vec3 tmx = max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1));
             tmn = min(tmn, min(min(tap_1_1, tap_m1_1), min(tap_1_m1, tap_m1_m1)));
@@ -1869,7 +1861,7 @@ void main() {
         {
             const float TA = 0.8;
             const float TM = 8.0;
-            vec3 th = texture2D(u_history, v_uv).rgb;
+            vec3 th = texture(u_history, v_uv).rgb;
             vec3 td = abs(c - th);
             float tm = max(td.r, max(td.g, td.b));
             c = mix(c, th, TA * (1.0 - clamp(tm * TM, 0.0, 1.0)));
@@ -1880,7 +1872,7 @@ void main() {
         {
             const float MS = 0.5;
             const float MM = 8.0;
-            vec3 mh = texture2D(u_history, v_uv).rgb;
+            vec3 mh = texture(u_history, v_uv).rgb;
             vec3 md = abs(c - mh);
             float mm = clamp(max(md.r, max(md.g, md.b)) * MM, 0.0, 1.0);
             c = mix(mh, c, mix(1.0, MS, mm));
@@ -1889,7 +1881,7 @@ void main() {
 
     #ifdef ENABLE_CONSTANT_BLEND_SMOOTH
         {
-            c = mix(c, texture2D(u_history, v_uv).rgb, 0.5);
+            c = mix(c, texture(u_history, v_uv).rgb, 0.5);
         }
     #endif
 
@@ -1897,7 +1889,7 @@ void main() {
         {
             const float SA = 180.0;
             const float FM = 0.9;
-            c = mix(c, texture2D(u_history, v_uv).rgb, clamp(SA / 360.0, 0.0, FM));
+            c = mix(c, texture(u_history, v_uv).rgb, clamp(SA / 360.0, 0.0, FM));
         }
     #endif
 
@@ -1905,7 +1897,7 @@ void main() {
         {
             const float CT2 = 0.5;
             const float CB2 = 0.5;
-            vec3 ch = texture2D(u_history, v_uv).rgb;
+            vec3 ch = texture(u_history, v_uv).rgb;
             vec3 ce = ch + (c - ch) * CT2;
             c = mix(c, ce, CB2);
         }
@@ -1916,7 +1908,7 @@ void main() {
             const float EB = 0.6;
             const float EV = 50.0;
             const float EM = 0.9;
-            vec3 eh = texture2D(u_history, v_uv).rgb;
+            vec3 eh = texture(u_history, v_uv).rgb;
             vec3 ed = c - eh;
             float ev = dot(ed, ed);
             float ea = EB / max(1.0 + ev * EV, 0.0001);
@@ -1937,7 +1929,7 @@ void main() {
             vec3 r4 = tap_0_m1 - rm;
             float rv = (dot(r0, r0) + dot(r1, r1) + dot(r2, r2) + dot(r3, r3) + dot(r4, r4)) / 5.0;
             float rw = mix(RB, RN, clamp(rv * RV, 0.0, 1.0));
-            c = mix(c, texture2D(u_history, v_uv).rgb, rw);
+            c = mix(c, texture(u_history, v_uv).rgb, rw);
         }
     #endif
 
@@ -1946,7 +1938,7 @@ void main() {
             const float LD2 = 0.7;
             const float LB2 = 0.15;
             const float LT2 = 0.3;
-            vec3 lh = texture2D(u_history, v_uv).rgb;
+            vec3 lh = texture(u_history, v_uv).rgb;
             float ll = dot(c, LUMA_BT709);
             c = mix(c, lh, mix(LD2, LB2, smoothstep(0.0, LT2, ll)));
         }
@@ -1957,7 +1949,7 @@ void main() {
             const float CL = 0.7;
             const float CH = 0.1;
             const float CS3 = 8.0;
-            vec3 ch = texture2D(u_history, v_uv).rgb;
+            vec3 ch = texture(u_history, v_uv).rgb;
             float cl = dot(c, LUMA_BT709);
             float cn = dot(tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1, LUMA_BT709) * 0.25;
             float cc = abs(cl - cn) * CS3;
@@ -1969,7 +1961,7 @@ void main() {
         {
             const float GB = 0.6;
             const float GS2 = 12.0;
-            vec3 gh = texture2D(u_history, v_uv).rgb;
+            vec3 gh = texture(u_history, v_uv).rgb;
             float gx = length(tap_1_0 - tap_m1_0);
             float gy = length(tap_0_1 - tap_0_m1);
             float ge = clamp((gx + gy) * GS2, 0.0, 1.0);
@@ -1988,7 +1980,7 @@ void main() {
                         tap_1_1 * tap_1_1 + tap_m1_1 * tap_m1_1 +
                         tap_1_m1 * tap_1_m1 + tap_m1_m1 * tap_m1_m1) / 9.0;
             vec3 vsd = sqrt(max(vm2 - vm1 * vm1, vec3(0.0)));
-            vec3 vh = clamp(texture2D(u_history, v_uv).rgb,
+            vec3 vh = clamp(texture(u_history, v_uv).rgb,
                             vm1 - vsd * VG, vm1 + vsd * VG);
             c = mix(c, vh, VB);
         }
@@ -2000,12 +1992,12 @@ void main() {
             const float MB2 = 0.5;
             float mc0 = 1.0 - MB / 3.0;
             float mc1 = MB / 6.0;
-            vec3 ms = (texture2D(u_input, v_uv + vec2(1.0, 0.0) * inv).rgb +
-                       texture2D(u_input, v_uv + vec2(-1.0, 0.0) * inv).rgb +
-                       texture2D(u_input, v_uv + vec2(0.0, 1.0) * inv).rgb +
-                       texture2D(u_input, v_uv + vec2(0.0, -1.0) * inv).rgb);
+            vec3 ms = (texture(u_input, v_uv + vec2(1.0, 0.0) * inv).rgb +
+                       texture(u_input, v_uv + vec2(-1.0, 0.0) * inv).rgb +
+                       texture(u_input, v_uv + vec2(0.0, 1.0) * inv).rgb +
+                       texture(u_input, v_uv + vec2(0.0, -1.0) * inv).rgb);
             vec3 mf = (c * mc0 + ms * mc1) / max(mc0 + mc1 * 4.0, 0.0001);
-            c = mix(mf, texture2D(u_history, v_uv).rgb, MB2);
+            c = mix(mf, texture(u_history, v_uv).rgb, MB2);
         }
     #endif
 
@@ -2015,12 +2007,12 @@ void main() {
             const float FC = 2.0;
             const float FD = 0.7;
             float fb = FB * res_scale;
-            vec3 fh = ycocg_encode(texture2D(u_history, v_uv).rgb);
+            vec3 fh = ycocg_encode(texture(u_history, v_uv).rgb);
             vec3 fu = ycocg_encode(c);
-            vec3 fe = ycocg_encode(texture2D(u_input, v_uv + vec2(fb, 0.0) * inv).rgb);
-            vec3 fw = ycocg_encode(texture2D(u_input, v_uv + vec2(-fb, 0.0) * inv).rgb);
-            vec3 fn = ycocg_encode(texture2D(u_input, v_uv + vec2(0.0, fb) * inv).rgb);
-            vec3 fs = ycocg_encode(texture2D(u_input, v_uv + vec2(0.0, -fb) * inv).rgb);
+            vec3 fe = ycocg_encode(texture(u_input, v_uv + vec2(fb, 0.0) * inv).rgb);
+            vec3 fw = ycocg_encode(texture(u_input, v_uv + vec2(-fb, 0.0) * inv).rgb);
+            vec3 fn = ycocg_encode(texture(u_input, v_uv + vec2(0.0, fb) * inv).rgb);
+            vec3 fs = ycocg_encode(texture(u_input, v_uv + vec2(0.0, -fb) * inv).rgb);
             vec3 fmn = min(fu, min(min(fe, fw), min(fn, fs)));
             vec3 fmx = max(fu, max(max(fe, fw), max(fn, fs)));
             vec3 fcl = clamp(fh, fmn, fmx);
@@ -2034,11 +2026,11 @@ void main() {
         {
             const float BB = 0.5;
             const float BS3 = 0.05;
-            vec3 bh = texture2D(u_history, v_uv).rgb;
-            vec3 be = texture2D(u_history, v_uv + vec2(1.0, 0.0) * inv).rgb;
-            vec3 bw = texture2D(u_history, v_uv + vec2(-1.0, 0.0) * inv).rgb;
-            vec3 bn = texture2D(u_history, v_uv + vec2(0.0, 1.0) * inv).rgb;
-            vec3 bs = texture2D(u_history, v_uv + vec2(0.0, -1.0) * inv).rgb;
+            vec3 bh = texture(u_history, v_uv).rgb;
+            vec3 be = texture(u_history, v_uv + vec2(1.0, 0.0) * inv).rgb;
+            vec3 bw = texture(u_history, v_uv + vec2(-1.0, 0.0) * inv).rgb;
+            vec3 bn = texture(u_history, v_uv + vec2(0.0, 1.0) * inv).rgb;
+            vec3 bs = texture(u_history, v_uv + vec2(0.0, -1.0) * inv).rgb;
             vec3 bca = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) / 5.0;
             vec3 bha = (bh + be + bw + bn + bs) / 5.0;
             vec3 bd = bca - bha;
@@ -2052,7 +2044,7 @@ void main() {
             const float PL = 0.4;
             const float PC = 0.7;
             vec3 pu = perc_ycc(c);
-            vec3 ph = perc_ycc(texture2D(u_history, v_uv).rgb);
+            vec3 ph = perc_ycc(texture(u_history, v_uv).rgb);
             c = perc_rgb(mix(pu, ph, vec3(PL, PC, PC)));
         }
     #endif
@@ -2063,12 +2055,12 @@ void main() {
             const float FH = 0.2;
             vec3 flo = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) / 5.0;
             vec3 fhi = c - flo;
-            vec3 fhh = texture2D(u_history, v_uv).rgb;
+            vec3 fhh = texture(u_history, v_uv).rgb;
             vec3 fhl = (fhh +
-                        texture2D(u_history, v_uv + vec2(1.0, 0.0) * inv).rgb +
-                        texture2D(u_history, v_uv + vec2(-1.0, 0.0) * inv).rgb +
-                        texture2D(u_history, v_uv + vec2(0.0, 1.0) * inv).rgb +
-                        texture2D(u_history, v_uv + vec2(0.0, -1.0) * inv).rgb) / 5.0;
+                        texture(u_history, v_uv + vec2(1.0, 0.0) * inv).rgb +
+                        texture(u_history, v_uv + vec2(-1.0, 0.0) * inv).rgb +
+                        texture(u_history, v_uv + vec2(0.0, 1.0) * inv).rgb +
+                        texture(u_history, v_uv + vec2(0.0, -1.0) * inv).rgb) / 5.0;
             vec3 fhhi = fhh - fhl;
             c = mix(flo, fhl, FL) + mix(fhi, fhhi, FH);
         }
@@ -2085,12 +2077,12 @@ void main() {
                         (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
             float oy = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
                         (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 oh = texture2D(u_history, v_uv).rgb;
+            vec3 oh = texture(u_history, v_uv).rgb;
             float ot = ol - (oh.r + oh.g + oh.b) / 3.0;
             float od = ox * ox + oy * oy;
-            vec2 of = vec2(ox, oy) * (-ot / max(od, 0.0001));
-            of = clamp(of * OS, vec2(-om), vec2(om));
-            c = mix(c, texture2D(u_history, v_uv + of * inv).rgb, OB);
+            vec2 of2 = vec2(ox, oy) * (-ot / max(od, 0.0001));
+            of2 = clamp(of2 * OS, vec2(-om), vec2(om));
+            c = mix(c, texture(u_history, v_uv + of2 * inv).rgb, OB);
         }
     #endif
 
@@ -2099,7 +2091,7 @@ void main() {
             const float AN = 0.1;
             const float AX = 0.85;
             const float AR = 15.0;
-            vec3 ah = texture2D(u_history, v_uv).rgb;
+            vec3 ah = texture(u_history, v_uv).rgb;
             vec3 ad = c - ah;
             float am = dot(ad, ad);
             float as2 = 1.0 - clamp(am * AR, 0.0, 1.0);
@@ -2120,13 +2112,13 @@ void main() {
                         (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
             float fy = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
                         (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 fh = texture2D(u_history, v_uv).rgb;
+            vec3 fh = texture(u_history, v_uv).rgb;
             float ft2 = fl - (fh.r + fh.g + fh.b) / 3.0;
             float fd2 = fx * fx + fy * fy;
             vec2 ff = vec2(fx, fy) * (-ft2 / max(fd2 + 0.001, 0.0001));
             ff = clamp(ff * FS2, vec2(-fm), vec2(fm));
             vec2 fw = v_uv + ff * inv;
-            vec3 fa = texture2D(u_history, fw).rgb;
+            vec3 fa = texture(u_history, fw).rgb;
             float rl = (fa.r + fa.g + fa.b) / 3.0;
             float rt = rl - fl;
             vec2 rv = vec2(fx, fy) * (-rt / max(fd2 + 0.001, 0.0001));
@@ -2134,8 +2126,8 @@ void main() {
             float fe = length(ff + rv);
             float fc2 = 1.0 - clamp(fe / max(FT, 0.0001), 0.0, 1.0);
             vec2 fhf = ff * 0.5 * inv;
-            vec3 wc = texture2D(u_input, v_uv - fhf).rgb;
-            vec3 wh = texture2D(u_history, v_uv + fhf).rgb;
+            vec3 wc = texture(u_input, v_uv - fhf).rgb;
+            vec3 wh = texture(u_history, v_uv + fhf).rgb;
             vec3 fmn = min(c, min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1)));
             vec3 fmx = max(c, max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1)));
             wh = clamp(wh, fmn, fmx);
@@ -2157,12 +2149,12 @@ void main() {
                         (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
             float dy = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
                         (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 dh = texture2D(u_history, v_uv).rgb;
+            vec3 dh = texture(u_history, v_uv).rgb;
             float dt = dl - (dh.r + dh.g + dh.b) / 3.0;
             float dd2 = dx * dx + dy * dy;
             vec2 df = vec2(dx, dy) * (-dt / max(dd2 + 0.001, 0.0001));
             df = clamp(df, vec2(-4.0 * res_scale), vec2(4.0 * res_scale));
-            vec3 dw = texture2D(u_history, v_uv + df * inv).rgb;
+            vec3 dw = texture(u_history, v_uv + df * inv).rgb;
             vec3 dm1 = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) / 5.0;
             vec3 dm2 = (c * c + tap_1_0 * tap_1_0 + tap_m1_0 * tap_m1_0 +
                         tap_0_1 * tap_0_1 + tap_0_m1 * tap_0_m1) / 5.0;
@@ -2189,8 +2181,8 @@ void main() {
             float egm = sqrt(egx * egx + egy * egy);
             vec2 egd = vec2(-egy, egx) / max(egm, 0.0001);
             float eds = ED * res_scale;
-            vec3 edp = texture2D(u_input, v_uv + egd * eds * inv).rgb;
-            vec3 edn = texture2D(u_input, v_uv - egd * eds * inv).rgb;
+            vec3 edp = texture(u_input, v_uv + egd * eds * inv).rgb;
+            vec3 edn = texture(u_input, v_uv - egd * eds * inv).rgb;
             vec3 eda = (edp + edn) * 0.5;
             float edw = clamp(egm * ES2, 0.0, 1.0);
             vec3 esp = mix(c, eda, edw * 0.3);
@@ -2199,12 +2191,12 @@ void main() {
                          (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
             float ely = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
                          (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 eh = texture2D(u_history, v_uv).rgb;
+            vec3 eh = texture(u_history, v_uv).rgb;
             float elt = el - (eh.r + eh.g + eh.b) / 3.0;
             float edn2 = elx * elx + ely * ely;
             vec2 ef = vec2(elx, ely) * (-elt / max(edn2 + 0.001, 0.0001));
             ef = clamp(ef, vec2(-4.0 * res_scale), vec2(4.0 * res_scale));
-            vec3 ew = texture2D(u_history, v_uv + ef * inv).rgb;
+            vec3 ew = texture(u_history, v_uv + ef * inv).rgb;
             vec3 emn = min(c, min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1)));
             vec3 emx = max(c, max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1)));
             ew = clamp(ew, emn, emx);
@@ -2221,7 +2213,7 @@ void main() {
         {
             const float DT2 = 0.15;
             const float DB2 = 0.5;
-            vec3 dh = texture2D(u_history, v_uv).rgb;
+            vec3 dh = texture(u_history, v_uv).rgb;
             vec3 dd = abs(c - dh);
             float dm = max(dd.r, max(dd.g, dd.b));
             c = mix(c, dh, DB2 * (1.0 - step(DT2, dm)));
@@ -2232,7 +2224,7 @@ void main() {
         {
             const float TS = 0.3;
             const float TM2 = 10.0;
-            vec3 th = texture2D(u_history, v_uv).rgb;
+            vec3 th = texture(u_history, v_uv).rgb;
             vec3 td = th - c;
             float tm = dot(td, td);
             float tw = TS * (1.0 - clamp(tm * TM2, 0.0, 1.0));
@@ -2255,8 +2247,8 @@ void main() {
         {
             const float CA = 0.005;
             vec2 cd = (v_uv - vec2(0.5)) * CA;
-            c.r = texture2D(u_input, v_uv + cd).r;
-            c.b = texture2D(u_input, v_uv - cd).b;
+            c.r = texture(u_input, v_uv + cd).r;
+            c.b = texture(u_input, v_uv - cd).b;
         }
     #endif
 
@@ -2266,10 +2258,10 @@ void main() {
             const float HT = 0.6;
             const float HS2 = 0.5;
             float hr = HR * res_scale;
-            vec3 hs = texture2D(u_input, v_uv + vec2(hr, 0.0) * inv).rgb +
-                      texture2D(u_input, v_uv - vec2(hr, 0.0) * inv).rgb +
-                      texture2D(u_input, v_uv + vec2(0.0, hr) * inv).rgb +
-                      texture2D(u_input, v_uv - vec2(0.0, hr) * inv).rgb;
+            vec3 hs = texture(u_input, v_uv + vec2(hr, 0.0) * inv).rgb +
+                      texture(u_input, v_uv - vec2(hr, 0.0) * inv).rgb +
+                      texture(u_input, v_uv + vec2(0.0, hr) * inv).rgb +
+                      texture(u_input, v_uv - vec2(0.0, hr) * inv).rgb;
             c.r = c.r + max(hs.r * 0.25 - HT, 0.0) * HS2;
         }
     #endif
@@ -2284,8 +2276,8 @@ void main() {
             for (int aj = 1; aj <= 6; aj++) {
                 float ai = float(aj);
                 vec2 ao = vec2(ai * aw, 0.0) * inv;
-                vec3 aa = max(texture2D(u_input, v_uv + ao).rgb - vec3(AT), vec3(0.0));
-                vec3 ab = max(texture2D(u_input, v_uv - ao).rgb - vec3(AT), vec3(0.0));
+                vec3 aa = max(texture(u_input, v_uv + ao).rgb - vec3(AT), vec3(0.0));
+                vec3 ab = max(texture(u_input, v_uv - ao).rgb - vec3(AT), vec3(0.0));
                 as2 += (aa + ab) / ai;
             }
             c = c + as2 * AI * vec3(0.4, 0.5, 1.0);
@@ -2314,7 +2306,7 @@ void main() {
     #ifdef ENABLE_ORDERED_DITHER
         {
             const float DS3 = 0.01;
-            float di = mod(floor(gl_FragCoord.x), 4.0) + mod(floor(gl_FragCoord.y), 4.0) * 4.0;
+            int di = int(mod(floor(gl_FragCoord.x), 4.0)) + int(mod(floor(gl_FragCoord.y), 4.0)) * 4;
             float dt = (dither_cell(di) + 0.5) / 16.0 - 0.5;
             c = c + vec3(dt) * DS3;
         }
@@ -2695,6 +2687,6 @@ void main() {
         }
     #endif
 
-    gl_FragColor = vec4(c, 1.0);
+    frag_out = vec4(c, 1.0);
 }
 "#;

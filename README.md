@@ -1,15 +1,17 @@
+> [!NOTE]
+> Bug reports and pull requests are welcome, but please understand that development happens in my free time and progress may be slow at times, the project is still maintained even if the last commit was made a while ago.
+
 # Bones – A Rust Ubershader Post‑FX Tool for Linux (OpenGL/Vulkan)
 
 Bones is a realtime post‑processing overlay for Linux games, written in Rust. It intercepts OpenGL and Vulkan swap buffers, applies a single pass ubershader with a wide range of effects, and then presents the modified frame. The tool is designed for **performance** and **simplicity**; no custom LUTs, no external shader loading, no custom values, and no ping pong. All effects are combined into one shader pass, making memory usage O(1) regardless of how many effects are enabled.
 
-> [!WARNING]
-> **This project is provided “as is” without official support.** It is a personal tool that I open‑sourced because it might be useful to others. Use it at your own risk. Bug reports and pull requests are welcome, but please understand that development happens in my free time.
-
 ## Table of Contents
 
+- [Minimum Requirements](#minimum-requirements)
 - [How It Works](#how-it-works)
 - [Features](#features)
 - [Installation](#installation)
+- [Flatpak](#flatpak)
 - [Usage](#usage)
   - [Profiles](#profiles)
   - [Configuration](#configuration)
@@ -18,6 +20,26 @@ Bones is a realtime post‑processing overlay for Linux games, written in Rust. 
 - [Performance & Limitations](#performance--limitations)
 - [Building from Source](#building-from-source)
 - [Credits & License](#credits--license)
+
+## Minimum Requirements
+
+### OpenGL path
+- **OpenGL 3.0** or newer (released 2008; supported by essentially all discrete and integrated GPUs made in the last 15 years)
+- Mesa 7.9+ or any proprietary driver with GL 3.0 support
+- GLX or EGL windowing
+
+Contexts that report GL 3.0 or higher automatically satisfy all requirements (core FBO, VAO, GLSL 1.30). Pure GL 2.1 contexts without `GL_ARB_vertex_array_object` will have post‑FX silently disabled for that context the game runs normally, just without the overlay.
+
+### Vulkan path
+- **Vulkan 1.0** or newer
+- A driver that supports `VK_KHR_swapchain`
+
+### OpenGL ES path (EGL)
+- **OpenGL ES 2.0** or newer
+
+### General
+- Linux x86_64 (32‑bit builds available but require additional tooling see [Building from Source](#building-from-source))
+- `glibc 2.17` or newer for native builds; `glibc 2.36` for portable release builds (built inside a Debian Bookworm container)
 
 ## How It Works
 
@@ -50,13 +72,13 @@ Because effects are executed in a fixed order (UV warp → spatial → temporal 
 
 ### Pre‑built binaries (if available)
 
-Download the latest release from the [Releases](../../releases) page. Then:
+Download the latest release from the [Releases](../../releases) page. Extract it, open a terminal inside the extracted directory, and run:
 
-- Extract it
-- Open a terminal inside and run:
-```
+```bash
 sudo make install
 ```
+
+This installs the `bones` launcher, `libbones.so`, and any Flatpak extensions that were included in the release bundle.
 
 ### Building from source
 
@@ -65,64 +87,185 @@ git clone https://github.com/pythonlover02/bones.git
 cd bones
 ```
 
-Build the 64‑bit version (the default):
+#### 64‑bit (default)
+
 ```bash
 make
 ```
 
-Optionally build a 32‑bit version (requires `rustup`, `cmake`, `python`, `git`):
+Produces `target/release/bones` and `target/release/libbones.so`.
+
+#### 32‑bit (optional)
+
+Requires `rustup`, `cmake`, `python` or `python3`, and `git`.
+
 ```bash
-make build-32
+make 32
 ```
 
-You can build both with:
+Produces `target/i686-unknown-linux-gnu/release/libbones.so`. The `i686-unknown-linux-gnu` Rust target is added automatically via `rustup` if not already installed.
+
+#### Portable release build
+
+Builds the 64‑bit library inside a Debian Bookworm container (for maximum glibc compatibility), then builds the 32‑bit library and all Flatpak extensions. Requires `podman` or `docker`, `flatpak`, `ostree`, and `python3`.
+
 ```bash
-make build-all
+make release
 ```
 
-Then install (as root) using:
+### Installing
+
+Run as root after building:
+
 ```bash
 sudo make install
 ```
 
-The build produces `libbones.so` (64‑bit and, if built, 32‑bit) and the launcher binary `bones`.
-By default files are installed to `/usr/local/bin/bones` and `/usr/local/lib/libbones.so`.
-To change the installation prefix or directory use `PREFIX` and `DESTDIR`:
+Default install locations:
+
+| File | Path |
+|------|------|
+| Launcher | `/usr/local/bin/bones` |
+| 64‑bit library | `/usr/local/lib/libbones.so` |
+| 32‑bit library | `/usr/local/lib32/libbones.so` (if built) |
+
+To change the prefix:
 
 ```bash
-sudo make install PREFIX=/opt/bones DESTDIR=./package
+sudo make install PREFIX=/opt/bones
 ```
 
-To uninstall:
+To stage into a directory (e.g. for packaging):
+
+```bash
+sudo make install DESTDIR=./package
+```
+
+`ldconfig` is run automatically after install. If Flatpak extensions were built beforehand (via `make flatpak` or `make release`) they are installed per‑user for the invoking user as part of `sudo make install`.
+
+### Uninstalling
+
 ```bash
 sudo make remove
 ```
 
-### Setup for use with any game/application
-
-Bones is a launcher that injects the overlay. Use it like:
+or equivalently:
 
 ```bash
-bones [PROFILE] -- YOUR_COMMAND [ARGS...]
+sudo make uninstall
 ```
 
-For example:
+This removes the launcher, both libraries, runs `ldconfig`, and uninstalls the Flatpak extension for the invoking user.
+
+### Cleaning build artifacts
 
 ```bash
-bones -- glxgears
-bones myprofile -- steam -applaunch 730   # CS:GO/CS2
+make clean
 ```
 
-The launcher:
-- Writes a default configuration to `~/.config/bones/` if none exists.
-- Sets the environment variables `LD_PRELOAD`, `VK_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to hook into the child process.
+Runs `cargo clean` and removes the `flatpak/` output directory and the `.flatpak-work/` staging directory.
+
+To clean only Flatpak artifacts without touching the Cargo build:
+
+```bash
+make flatpak-clean
+```
+
+## Flatpak
+
+Flatpak applications run inside a sandbox and cannot see `LD_PRELOAD` or `VK_LAYER_PATH` from the host. Bones supports this through a **Flatpak extension** a bundle that installs into the `org.freedesktop.Platform` runtime and is visible to all Flatpak apps automatically.
+
+Extensions are built for the following runtime versions: `23.08`, `24.08`, `25.08`.
+
+### Build requirements
+
+- `flatpak`
+- `ostree`
+- `python3`
+- A completed `make` or `make release` build (the 64‑bit library must exist before running `make flatpak`)
+
+### Building the extensions
+
+First build the native 64‑bit library:
+
+```bash
+make
+```
+
+Optionally build the 32‑bit library too (it will be bundled inside the extension if present):
+
+```bash
+make 32
+```
+
+Then build the Flatpak extensions:
+
+```bash
+make flatpak
+```
+
+This produces one `.flatpak` bundle per supported runtime version inside the `flatpak/` directory:
+
+```
+flatpak/org.freedesktop.Platform.VulkanLayer.bones-23.08.flatpak
+flatpak/org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
+flatpak/org.freedesktop.Platform.VulkanLayer.bones-25.08.flatpak
+```
+
+To build everything at once (portable 64‑bit, 32‑bit, and all Flatpak extensions) use the release target:
+
+```bash
+make release
+```
+
+### Installing the extensions
+
+Install the bundle that matches your `org.freedesktop.Platform` runtime version. If you are unsure which version you have, run `flatpak list` and look for `org.freedesktop.Platform`.
+
+```bash
+flatpak install --user flatpak/org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
+```
+
+Multiple runtime versions can be installed side by side without conflict. If you ran `sudo make install` and Flatpak extensions were already built, they are installed automatically for the invoking user you do not need to run the command above manually.
+
+To uninstall:
+
+```bash
+flatpak uninstall --user org.freedesktop.Platform.VulkanLayer.bones
+```
+
+### Using Bones with a Flatpak application
+
+#### Any Flatpak application
+
+Use the `bones` launcher with `flatpak run`:
+
+```bash
+bones -- flatpak run com.example.Game
+```
+
+Bones detects the `flatpak run` invocation automatically, reads the application metadata to find its entry point, and rewrites the command to inject via `bones-inject` inside the sandbox. You can pass `flatpak run` flags normally:
+
+```bash
+bones -- flatpak run --branch=stable com.example.Game
+```
+
+#### Profiles with Flatpak
+
+Profiles work the same way as with native applications. The config directory (`~/.config/bones/`) is shared into the sandbox automatically by the launcher:
+
+```bash
+bones myprofile -- flatpak run com.example.Game
+```
+
+> [!NOTE]
+> The Vulkan layer is registered as an implicit layer inside the extension and activates automatically when `BONES_ACTIVE=1` is set by `bones-inject`. For OpenGL applications `bones-inject` sets `LD_PRELOAD` to the bundled library path inside the extension mount.
 
 ## Usage
 
 ### Profiles
 
-A profile is a named configuration stored in `~/.config/bones/<name>-config.toml`.
-The default profile is `bones` (file `bones-config.toml`).
+A profile is a named configuration stored in `~/.config/bones/<name>-config.toml`. The default profile is `bones` (file `bones-config.toml`).
 
 ```bash
 bones retro -- ~/games/retro-game
@@ -153,11 +296,11 @@ convergent_accumulate = true        # primary temporal mode
 vibrance_boost = true
 ```
 
-All effects are listed in the default config file. Set them to `true` or `false`.
+All effects are listed and documented in the default config file generated at `~/.config/bones/bones-config.toml` on first run. Set any effect to `true` to enable it.
 
 ### Hot Reload
 
-When `hot_reload = true`, Bones uses `inotify` to watch the config directory. Save your changes – the shader recompiles and reloads without restarting the game.
+When `hot_reload = true`, Bones uses `inotify` to watch the config directory. Save your changes and the shader recompiles and reloads without restarting the game.
 
 ## Effect Categories
 
@@ -198,6 +341,7 @@ Effects are processed in this order (see the TOML file for full lists):
   - No multi‑pass effects (e.g., advanced bloom with downsample chains).
   - Effects that depend on per‑object motion vectors (like true DLSS) are approximated by optical flow from neighbour pixels.
   - Some temporal modes may cause ghosting if motion is too fast; use `surface_disocclusion_guard` to reduce it.
+  - OpenGL contexts below 3.0 without `GL_ARB_vertex_array_object` will have post‑FX disabled for that context. The application still runs normally.
 
 Because the ubershader combines all effects into one code block, some effects may interfere with each other if not designed to be layered. The order is fixed and cannot be changed at runtime.
 

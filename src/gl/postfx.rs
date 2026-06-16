@@ -1,8 +1,5 @@
-use std::ptr;
-
 use crate::consts::*;
 use crate::consts::FULLSCREEN_TRI_VERTS;
-use crate::consts::VBO_COMPONENTS;
 use crate::timing::frame_time_fps;
 
 use super::context::CtxState;
@@ -12,6 +9,7 @@ use super::fns::gl_fns;
 pub(crate) struct GlState {
     pub(crate) draw_fbo: i32,
     pub(crate) read_fbo: i32,
+    pub(crate) vao_binding: i32,
     pub(crate) program: i32,
     pub(crate) active_tex: i32,
     pub(crate) tex0: i32,
@@ -112,8 +110,9 @@ fn set_attrib0(on: i32) {
 pub(crate) fn restore_gl_state(s: &GlState) {
     let f = gl_fns();
     unsafe {
-        (f.bind_framebuffer)(GL_DRAW_FRAMEBUFFER_EXT, s.draw_fbo as u32);
-        (f.bind_framebuffer)(GL_READ_FRAMEBUFFER_EXT, s.read_fbo as u32);
+        (f.bind_framebuffer)(GL_DRAW_FRAMEBUFFER, s.draw_fbo as u32);
+        (f.bind_framebuffer)(GL_READ_FRAMEBUFFER, s.read_fbo as u32);
+        (f.bind_vertex_array)(s.vao_binding as u32);
         (f.use_program)(s.program as u32);
         (f.active_texture)(GL_TEXTURE0);
         (f.bind_texture)(GL_TEXTURE_2D, s.tex0 as u32);
@@ -157,9 +156,9 @@ pub(crate) fn draw_postfx_gl(st: &CtxState, w: i32, h: i32) {
     unsafe {
         (f.active_texture)(GL_TEXTURE0);
         (f.bind_texture)(GL_TEXTURE_2D, st.tex_input);
-        (f.bind_framebuffer)(GL_READ_FRAMEBUFFER_EXT, 0);
+        (f.bind_framebuffer)(GL_READ_FRAMEBUFFER, 0);
         (f.copy_tex_sub_image_2d)(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
-        (f.bind_framebuffer)(GL_DRAW_FRAMEBUFFER_EXT, 0);
+        (f.bind_framebuffer)(GL_DRAW_FRAMEBUFFER, 0);
         (f.disable)(GL_DEPTH_TEST);
         (f.disable)(GL_BLEND);
         (f.disable)(GL_CULL_FACE);
@@ -180,12 +179,10 @@ pub(crate) fn draw_postfx_gl(st: &CtxState, w: i32, h: i32) {
         (f.uniform1f)(st.locs.fps, fps);
         (f.active_texture)(GL_TEXTURE1);
         (f.bind_texture)(GL_TEXTURE_2D, st.tex_history);
-        (f.bind_buffer)(GL_ARRAY_BUFFER, st.vbo);
-        (f.vertex_attrib_pointer)(0, VBO_COMPONENTS, GL_FLOAT, 0, 0, ptr::null());
-        (f.enable_vertex_attrib_array)(0);
+        (f.bind_vertex_array)(st.vao);
         (f.draw_arrays)(GL_TRIANGLES, 0, FULLSCREEN_TRI_VERTS);
-        (f.bind_framebuffer)(GL_READ_FRAMEBUFFER_EXT, 0);
-        (f.bind_framebuffer)(GL_DRAW_FRAMEBUFFER_EXT, st.fbo_history);
+        (f.bind_framebuffer)(GL_READ_FRAMEBUFFER, 0);
+        (f.bind_framebuffer)(GL_DRAW_FRAMEBUFFER, st.fbo_history);
         (f.blit_framebuffer)(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR as u32);
     }
 }

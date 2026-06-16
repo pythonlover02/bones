@@ -59,6 +59,8 @@ pub(crate) struct GlFns {
     pub(crate) get_vertex_attribiv: unsafe extern "C" fn(u32, u32, *mut i32),
     pub(crate) draw_arrays: unsafe extern "C" fn(u32, i32, i32),
     pub(crate) get_string: unsafe extern "C" fn(u32) -> *const c_char,
+    pub(crate) gen_vertex_arrays: unsafe extern "C" fn(i32, *mut u32),
+    pub(crate) bind_vertex_array: unsafe extern "C" fn(u32),
 }
 
 pub(crate) fn gl_fns() -> &'static GlFns {
@@ -88,11 +90,11 @@ pub(crate) fn gl_fns() -> &'static GlFns {
             tex_image_2d: mem::transmute(gl_lookup("glTexImage2D")),
             tex_parameteri: mem::transmute(gl_lookup("glTexParameteri")),
             copy_tex_sub_image_2d: mem::transmute(gl_lookup("glCopyTexSubImage2D")),
-            gen_framebuffers: mem::transmute(gl_lookup("glGenFramebuffersEXT")),
-            delete_framebuffers: mem::transmute(gl_lookup("glDeleteFramebuffersEXT")),
-            bind_framebuffer: mem::transmute(gl_lookup("glBindFramebufferEXT")),
-            framebuffer_texture_2d: mem::transmute(gl_lookup("glFramebufferTexture2DEXT")),
-            blit_framebuffer: mem::transmute(gl_lookup("glBlitFramebufferEXT")),
+            gen_framebuffers: mem::transmute(gl_lookup("glGenFramebuffers")),
+            delete_framebuffers: mem::transmute(gl_lookup("glDeleteFramebuffers")),
+            bind_framebuffer: mem::transmute(gl_lookup("glBindFramebuffer")),
+            framebuffer_texture_2d: mem::transmute(gl_lookup("glFramebufferTexture2D")),
+            blit_framebuffer: mem::transmute(gl_lookup("glBlitFramebuffer")),
             create_shader: mem::transmute(gl_lookup("glCreateShader")),
             shader_source: mem::transmute(gl_lookup("glShaderSource")),
             compile_shader: mem::transmute(gl_lookup("glCompileShader")),
@@ -118,6 +120,8 @@ pub(crate) fn gl_fns() -> &'static GlFns {
             get_vertex_attribiv: mem::transmute(gl_lookup("glGetVertexAttribiv")),
             draw_arrays: mem::transmute(gl_lookup("glDrawArrays")),
             get_string: mem::transmute(gl_lookup("glGetString")),
+            gen_vertex_arrays: mem::transmute(gl_lookup("glGenVertexArrays")),
+            bind_vertex_array: mem::transmute(gl_lookup("glBindVertexArray")),
         }
     })
 }

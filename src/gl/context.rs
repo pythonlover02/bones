@@ -32,6 +32,7 @@ pub(crate) struct CtxState {
     pub(crate) postfx_enabled: bool,
     pub(crate) program: u32,
     pub(crate) vbo: u32,
+    pub(crate) vao: u32,
     pub(crate) tex_input: u32,
     pub(crate) fbo_history: u32,
     pub(crate) tex_history: u32,
@@ -126,9 +127,22 @@ fn build_gl_program(gl_src: &str) -> Option<(u32, UniformLocations)> {
         })
 }
 
-fn gl_has_fbo_ext() -> bool {
-    let p = unsafe { (gl_fns().get_string)(GL_EXTENSIONS) };
-    cstr_to_str(p).split(' ').any(|e| e == "GL_EXT_framebuffer_object")
+fn gl_ver_major(ver: &str) -> u8 {
+    ver.split(' ')
+        .next()
+        .and_then(|t| t.split('.').next())
+        .and_then(|maj| maj.parse().ok())
+        .unwrap_or(0)
+}
+
+fn gl_has_fbo() -> bool {
+    let ver = cstr_to_str(unsafe { (gl_fns().get_string)(GL_VERSION) });
+    ver.starts_with("OpenGL ES") || gl_ver_major(ver) >= 3
+}
+
+fn gl_vao_ptr_valid() -> bool {
+    gl_fns().gen_vertex_arrays as usize != 0
+        && gl_fns().bind_vertex_array as usize != 0
 }
 
 pub(crate) fn alloc_tex(w: i32, h: i32) -> u32 {
@@ -159,18 +173,28 @@ pub(crate) fn destroy_targets(st: &mut CtxState) {
     st.fbo_history = 0;
 }
 
+fn drain_gl_errors() {
+    let f = gl_fns();
+    std::iter::from_fn(|| match unsafe { (f.get_error)() } {
+        0 => None,
+        _ => Some(()),
+    })
+    .for_each(|_| ());
+}
+
 pub(crate) fn alloc_targets(st: &mut CtxState, w: i32, h: i32) -> bool {
+    drain_gl_errors();
     let f = gl_fns();
     st.tex_input = alloc_tex(w, h);
     st.tex_history = alloc_tex(w, h);
     let mut fbo: u32 = 0;
     unsafe {
         (f.gen_framebuffers)(1, &mut fbo);
-        (f.bind_framebuffer)(GL_FRAMEBUFFER_EXT, fbo);
-        (f.framebuffer_texture_2d)(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, st.tex_history, 0);
+        (f.bind_framebuffer)(GL_FRAMEBUFFER, fbo);
+        (f.framebuffer_texture_2d)(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, st.tex_history, 0);
         (f.clear_color)(0.0, 0.0, 0.0, 1.0);
         (f.clear)(GL_COLOR_BUFFER_BIT);
-        (f.bind_framebuffer)(GL_FRAMEBUFFER_EXT, 0);
+        (f.bind_framebuffer)(GL_FRAMEBUFFER, 0);
     }
     st.fbo_history = fbo;
     st.w = w;
@@ -186,10 +210,15 @@ pub(crate) fn alloc_targets(st: &mut CtxState, w: i32, h: i32) -> bool {
     }
 }
 
-fn call_create_vbo() -> u32 {
+fn call_create_vbo() -> (u32, u32) {
     let f = gl_fns();
+    let mut prev_vao: i32 = 0;
+    let mut vao: u32 = 0;
     let mut vbo: u32 = 0;
     unsafe {
+        (f.get_integerv)(GL_VERTEX_ARRAY_BINDING, &mut prev_vao);
+        (f.gen_vertex_arrays)(1, &mut vao);
+        (f.bind_vertex_array)(vao);
         (f.gen_buffers)(1, &mut vbo);
         (f.bind_buffer)(GL_ARRAY_BUFFER, vbo);
         (f.buffer_data)(
@@ -198,8 +227,11 @@ fn call_create_vbo() -> u32 {
             TRI_VERTS.as_ptr() as *const c_void,
             GL_STATIC_DRAW,
         );
+        (f.vertex_attrib_pointer)(0, VBO_COMPONENTS, GL_FLOAT, 0, 0, ptr::null());
+        (f.enable_vertex_attrib_array)(0);
+        (f.bind_vertex_array)(prev_vao as u32);
     }
-    vbo
+    (vbo, vao)
 }
 
 fn fbo_status_message(supported: bool) -> &'static str {
@@ -211,7 +243,7 @@ fn fbo_status_message(supported: bool) -> &'static str {
 
 fn check_fbo_caps(st: &mut CtxState) {
     st.fbo_checked = true;
-    st.fbo_supported = gl_has_fbo_ext();
+    st.fbo_supported = gl_has_fbo() && gl_vao_ptr_valid();
     st.postfx_enabled = st.fbo_supported;
     log_at(LogLevel::Info, fbo_status_message(st.fbo_supported));
 }
@@ -260,7 +292,7 @@ fn rebuild_ctx_program(st: &mut CtxState, gen: i32) {
         }
     }
     match needs_vbo(st.vbo) {
-        true => { st.vbo = call_create_vbo(); }
+        true => { let (vbo, vao) = call_create_vbo(); st.vbo = vbo; st.vao = vao; }
         false => (),
     }
 }

@@ -1,7 +1,7 @@
 > [!NOTE]
 > Bug reports and pull requests are welcome, but please understand that development happens in my free time and progress may be slow at times, the project is still maintained even if the last commit was made a while ago.
 
-# Bones – A Rust Ubershader Post‑FX Tool for Linux (OpenGL/Vulkan)
+# Bones – GLSL ubershader post‑processing tool (OpenGL/Vulkan)
 
 Bones is a realtime post‑processing overlay for Linux games, written in Rust. It intercepts OpenGL and Vulkan swap buffers, applies a single pass ubershader with a wide range of effects, and then presents the modified frame. The tool is designed for **performance** and **simplicity**; no custom LUTs, no external shader loading, no custom values, and no ping pong. All effects are combined into one shader pass, making memory usage O(1) regardless of how many effects are enabled.
 

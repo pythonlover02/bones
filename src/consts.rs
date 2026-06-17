@@ -2222,7 +2222,7 @@ void main() {
             vec3 td = th - c;
             float tm = dot(td, td);
             float tw = TS * (1.0 - clamp(tm * TM2, 0.0, 1.0));
-            c = mix(c, th + td * tw, tw);
+            c = clamp(mix(c, th + td * tw, tw), 0.0, 1.0);
         }
     #endif
 

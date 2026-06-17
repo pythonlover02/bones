@@ -18,7 +18,7 @@ FLATPAK_SRCDIR   := ftk
 FLATPAK_EXT_ID   := org.freedesktop.Platform.VulkanLayer.bones
 FLATPAK_ARCH     := x86_64
 FLATPAK_MOUNT    := /usr/lib/extensions/vulkan/bones
-FLATPAK_BIN_ABS  := $(FLATPAK_MOUNT)/bin/bones-inject
+FLATPAK_BIN_ABS  := $(FLATPAK_MOUNT)/bin/bones-flatpak
 
 .PHONY: all release install integrated remove uninstall clean check-root flatpak flatpak-clean
 
@@ -88,10 +88,25 @@ integrated:
 remove uninstall: check-root
 	rm -f $(DESTDIR)$(BINDIR)/bones
 	rm -rf $(DESTDIR)$(LIBDIR)
-	@if command -v flatpak >/dev/null 2>&1 && [ -n "$${SUDO_USER}" ]; then \
-	  su - "$${SUDO_USER}" -c \
-	    "flatpak uninstall --user -y $(FLATPAK_EXT_ID) 2>/dev/null" || true; \
+	@echo "  removed $(BINDIR)/bones"
+	@echo "  removed $(LIBDIR)"
+	@if command -v flatpak >/dev/null 2>&1; then \
+	  flatpak uninstall --system -y $(FLATPAK_EXT_ID) 2>/dev/null \
+	    && echo "  removed flatpak extension (system)" || true; \
+	  if [ -n "$${SUDO_USER}" ]; then \
+	    su - "$${SUDO_USER}" -c \
+	      "flatpak uninstall --user -y $(FLATPAK_EXT_ID) 2>/dev/null" \
+	      && echo "  removed flatpak extension (user)" || true; \
+	    su - "$${SUDO_USER}" -c \
+	      "rm -rf \"\$$HOME/.config/bones\"" \
+	      && echo "  removed user config/runtime (~/.config/bones)" || true; \
+	  else \
+	    echo "  note: SUDO_USER not set — could not remove --user flatpak extension"; \
+	    echo "        run as your user: flatpak uninstall --user $(FLATPAK_EXT_ID)"; \
+	    echo "        and: rm -rf ~/.config/bones"; \
+	  fi; \
 	fi
+	@echo "removed."
 
 flatpak:
 	@test -f $(TARGET) || { \
@@ -111,15 +126,13 @@ flatpak:
 	  mkdir -p \
 	    $(FLATPAK_WORKDIR)/stage/files/lib \
 	    $(FLATPAK_WORKDIR)/stage/files/bin \
-	    $(FLATPAK_WORKDIR)/stage/files/share/vulkan/implicit_layer.d \
 	    $(FLATPAK_WORKDIR)/repo; \
 	  \
 	  ostree init --repo=$(FLATPAK_WORKDIR)/repo --mode=archive-z2; \
 	  \
 	  cp $(TARGET) $(FLATPAK_WORKDIR)/stage/files/lib/libbones.so; \
-	  cp $(FLATPAK_SRCDIR)/bones-inject $(FLATPAK_WORKDIR)/stage/files/bin/bones-inject; \
-	  chmod +x $(FLATPAK_WORKDIR)/stage/files/bin/bones-inject; \
-	  cp $(MANIFEST) $(FLATPAK_WORKDIR)/stage/files/share/vulkan/implicit_layer.d/VkLayer_bones.json; \
+	  cp $(FLATPAK_SRCDIR)/bones-flatpak $(FLATPAK_WORKDIR)/stage/files/bin/bones-flatpak; \
+	  chmod +x $(FLATPAK_WORKDIR)/stage/files/bin/bones-flatpak; \
 	  cp $(MANIFEST) $(FLATPAK_WORKDIR)/stage/files/lib/VkLayer_bones.json; \
 	  \
 	  cp $(FLATPAK_SRCDIR)/metadata.$$rt $(FLATPAK_WORKDIR)/metadata; \
@@ -146,7 +159,13 @@ flatpak:
 	@echo "install:"
 	@echo "  flatpak install --user $(FLATPAK_EXT_ID)-RUNTIME.flatpak"
 	@echo
+	@echo "steam (flatpak) launch option — default profile:"
 	@echo "  $(FLATPAK_BIN_ABS) %command%"
+	@echo "steam (flatpak) launch option — named profile:"
+	@echo "  BONES_CONFIG_NAME=myprofile $(FLATPAK_BIN_ABS) %command%"
+	@echo
+	@echo "any flatpak app via bones:"
+	@echo "  bones -- flatpak run APP_ID"
 
 flatpak-clean:
 	rm -rf $(FLATPAK_OUTDIR)/*.flatpak $(FLATPAK_WORKDIR)

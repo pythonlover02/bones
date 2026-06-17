@@ -14,6 +14,13 @@ pub(crate) const INSTALL_DIR: &str = "/usr/local/lib/bones";
 pub(crate) const DEV_LIB: &str = "target/release/libbones.so";
 pub(crate) const DEV_DIR: &str = "target/release";
 
+pub(crate) const FLATPAK_CMD: &str = "flatpak";
+pub(crate) const FLATPAK_RUN: &str = "run";
+pub(crate) const FLATPAK_INJECT: &str = "/usr/lib/extensions/vulkan/bones/bin/bones-flatpak";
+pub(crate) const FLATPAK_META_KEY: &str = "command=";
+pub(crate) const FLATPAK_INFO: &str = "info";
+pub(crate) const FLATPAK_SHOW_META: &str = "--show-metadata";
+
 pub(crate) const CONFIG_SEP: char = ';';
 
 pub(crate) const LOG_FD: i32 = 2;

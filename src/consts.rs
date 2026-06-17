@@ -2307,7 +2307,7 @@ void main() {
     #endif
 
     #ifdef ENABLE_LINEAR_EXPOSURE
-        c = c * 1.0;
+        c = c * 1.3;
     #endif
 
     #ifdef ENABLE_ACES_TONEMAP

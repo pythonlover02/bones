@@ -260,9 +260,3 @@ The order is fixed and cannot be changed at runtime.
 The project is heavily inspired by existing reshade tools, but the ubershader implementation and the majority of the effect code were written from scratch (or ported from GLSL snippets found in public‑domain and open‑source shader repositories).
 
 All 118 effect implementations are original or derived from well‑known algorithms (FXAA by Timothy Lottes, CAS/RCAS from AMD GPUOpen, etc.) under their respective licenses (mostly MIT/BSD). The overall project is released under the **GNU General Public License v3.0**. Full text is in the [LICENSE](LICENSE) file.
-
----
-
-
-
-

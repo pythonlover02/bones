@@ -4,6 +4,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
+use crate::consts::CONFIG_SEP;
+use crate::consts::ENV_CONFIG;
+use crate::consts::ENV_CONFIG_NAME;
 use crate::consts::HEAD;
 use crate::consts::REGISTRY;
 use crate::logging::{LogLevel, log_at, init_log_level};
@@ -38,11 +41,37 @@ fn effects_of(doc: &toml::Value) -> HashMap<String, bool> {
     }
 }
 
+fn name_is_known(raw: &str) -> bool {
+    REGISTRY.iter().any(|e| e.name == raw)
+}
+
+fn warn_unknown(raw: &str) -> Option<(String, bool)> {
+    match name_is_known(raw) {
+        true => Some((raw.to_string(), true)),
+        false => {
+            log_at(LogLevel::Warn, "unknown effect in BONES_CONFIG, ignoring");
+            None
+        }
+    }
+}
+
+fn effects_from_list(text: &str) -> HashMap<String, bool> {
+    text.split(CONFIG_SEP)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(warn_unknown)
+        .collect()
+}
+
 pub(crate) fn parse_settings(text: &str) -> Settings {
     let doc = text.parse::<toml::Value>().unwrap_or(toml::Value::Table(toml::map::Map::new()));
     let effects = effects_of(&doc);
     let hot = effects.get("hot_reload").copied().unwrap_or(true);
     Settings { hot_reload: hot, effects }
+}
+
+pub(crate) fn settings_from_env(text: &str) -> Settings {
+    Settings { hot_reload: false, effects: effects_from_list(text) }
 }
 
 pub(crate) fn default_settings() -> Settings {
@@ -77,7 +106,7 @@ pub(crate) fn config_dir() -> PathBuf {
 }
 
 pub(crate) fn profile_name() -> String {
-    sanitize_name(&env::var("BONES_CONFIG_NAME").unwrap_or_else(|_| "bones".into()))
+    sanitize_name(&env::var(ENV_CONFIG_NAME).unwrap_or_else(|_| "bones".into()))
 }
 
 pub(crate) fn config_path(name: &str) -> PathBuf {
@@ -90,6 +119,13 @@ pub(crate) fn read_config(path: &PathBuf) -> Settings {
         .unwrap_or_else(|_| default_settings())
 }
 
+pub(crate) fn resolve_settings() -> Settings {
+    match env::var(ENV_CONFIG) {
+        Ok(text) => settings_from_env(&text),
+        Err(_) => read_config(&config_path(&profile_name())),
+    }
+}
+
 pub(crate) fn ensure_settings() -> Settings {
     let have = SETTINGS.read().ok().and_then(|g| g.clone());
     match have {
@@ -100,7 +136,7 @@ pub(crate) fn ensure_settings() -> Settings {
 
 pub(crate) fn load_settings() -> Settings {
     init_log_level();
-    let s = read_config(&config_path(&profile_name()));
+    let s = resolve_settings();
     let (gl, spv) = build_shaders(&s, &REGISTRY);
     store_shaders(gl, spv);
     store_settings(s.clone());

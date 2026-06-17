@@ -1,10 +1,20 @@
 pub(crate) const LAYER_NAME: &str = "VK_LAYER_BONES_overlay";
 pub(crate) const LAYER_DESC: &str = "Bones -> Linux GL/Vulkan shader post-FX";
 
-pub(crate) const FLATPAK_CMD: &str = "flatpak";
-pub(crate) const FLATPAK_RUN: &str = "run";
-pub(crate) const FLATPAK_INJECT_ABS: &str = "/usr/lib/extensions/vulkan/bones/bin/bones-inject";
-pub(crate) const FLATPAK_METADATA_KEY: &str = "command=";
+pub(crate) const ENV_CONFIG_NAME: &str = "BONES_CONFIG_NAME";
+pub(crate) const ENV_CONFIG: &str = "BONES_CONFIG";
+pub(crate) const ENV_LOG: &str = "BONES_LOG";
+
+pub(crate) const ENV_PRELOAD: &str = "LD_PRELOAD";
+pub(crate) const ENV_VK_ADD_LAYER_PATH: &str = "VK_ADD_LAYER_PATH";
+pub(crate) const ENV_VK_INSTANCE_LAYERS: &str = "VK_INSTANCE_LAYERS";
+
+pub(crate) const INSTALL_LIB: &str = "/usr/local/lib/bones/libbones.so";
+pub(crate) const INSTALL_DIR: &str = "/usr/local/lib/bones";
+pub(crate) const DEV_LIB: &str = "target/release/libbones.so";
+pub(crate) const DEV_DIR: &str = "target/release";
+
+pub(crate) const CONFIG_SEP: char = ';';
 
 pub(crate) const LOG_FD: i32 = 2;
 pub(crate) const US_PER_S: f32 = 1_000_000.0;
@@ -20,35 +30,12 @@ pub(crate) const LOG_LEVEL_WARN: i32 = 2;
 pub(crate) const LOG_LEVEL_INFO: i32 = 3;
 pub(crate) const DEFAULT_LOG_LEVEL: i32 = 2;
 
-#[cfg(target_pointer_width = "64")]
-pub(crate) const ARCH_SO: &str = "libbones64.so";
-#[cfg(target_pointer_width = "32")]
-pub(crate) const ARCH_SO: &str = "libbones32.so";
-
 #[cfg(target_arch = "x86_64")]
 pub(crate) const DLSYM_VERSION: &[u8] = b"GLIBC_2.2.5\0";
-#[cfg(target_arch = "x86")]
-pub(crate) const DLSYM_VERSION: &[u8] = b"GLIBC_2.0\0";
-#[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+#[cfg(not(target_arch = "x86_64"))]
 pub(crate) const DLSYM_VERSION: &[u8] = b"GLIBC_2.17\0";
 
 pub(crate) const USAGE: &str = "usage: bones [PROFILE] -- COMMAND [ARGS...]\n  bones -- CMD            run CMD with the default profile (~/.config/bones/bones-config.toml)\n  bones NAME -- CMD       run CMD with profile ~/.config/bones/NAME-config.toml\n";
-
-pub(crate) const MANIFEST_JSON: &str = r#"{
-    "file_format_version": "1.2.0",
-    "layer": {
-        "name": "VK_LAYER_BONES_overlay",
-        "type": "GLOBAL",
-        "library_path": "libbones.so",
-        "api_version": "1.3.0",
-        "implementation_version": "3",
-        "description": "Bones -> Linux GL/Vulkan shader post-FX",
-        "functions": {
-            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
-        }
-    }
-}
-"#;
 
 pub(crate) const HEAD: &str = r#"##bones default profile
 # effect process in the order listed to ubershader pipeline: UV to Spatial to Temporal to Inline to Color

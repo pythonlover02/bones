@@ -1714,7 +1714,7 @@ void main() {
             const float OS = 1.1;
             float ol = dot(c, LUMA_BT601);
             float oc = smoothstep(0.0, OB, ol);
-            c = c * oc * OS + c * (1.0 - OS) * oc;
+            c = mix(vec3(ol), c, OS) * oc;
         }
     #endif
 

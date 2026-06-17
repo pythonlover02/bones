@@ -78,12 +78,11 @@ install: check-root
 	@echo
 	@echo "installed."
 
-integrated:
-	@test -f $(TARGET) || { echo "missing $(TARGET) — run 'make' first"; exit 1; }
-	install -Dm755 $(TARGET) $(DESTDIR)$(LIBDIR)/libbones.so
-	install -Dm644 $(MANIFEST) $(DESTDIR)$(LIBDIR)/VkLayer_bones.json
-	@echo "  $(DESTDIR)$(LIBDIR)/libbones.so"
-	@echo "  $(DESTDIR)$(LIBDIR)/VkLayer_bones.json"
+integrated: all
+	@test -f $(TARGET) || { echo "missing $(TARGET) — build failed"; exit 1; }
+	@cp $(MANIFEST) $(dir $(TARGET))
+	@echo "  $(TARGET)"
+	@echo "  $(dir $(TARGET))$(MANIFEST)"
 
 remove uninstall: check-root
 	rm -f $(DESTDIR)$(BINDIR)/bones

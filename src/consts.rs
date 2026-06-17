@@ -1714,7 +1714,7 @@ void main() {
             const float OS = 1.1;
             float ol = dot(c, LUMA_BT601);
             float oc = smoothstep(0.0, OB, ol);
-            c = c * oc * OS + c * (1.0 - OS) * oc;
+            c = mix(vec3(ol), c, OS) * oc;
         }
     #endif
 
@@ -2455,12 +2455,15 @@ void main() {
             float hmn = min(c.r, min(c.g, c.b));
             float hl = (hmx + hmn) * 0.5;
             float hd = hmx - hmn;
-            float hh = mix(mix(4.0 + (c.r - c.g) / max(hd, 0.0001),
-                               2.0 + (c.b - c.r) / max(hd, 0.0001),
-                               step(abs(c.g - hmx), 0.0001) * 0.0 + step(c.g, hmx) * step(hmx, c.g)),
-                           (c.g - c.b) / max(hd, 0.0001),
-                           step(c.r, hmx) * step(hmx, c.r));
-            hh = fract(hh / 6.0 + HH);
+            float is_r = step(hmx - c.r, 0.0);
+            float is_g = step(hmx - c.g, 0.0) * (1.0 - is_r);
+            float is_b = (1.0 - is_r) * (1.0 - is_g);
+            float hh_r = mod((c.g - c.b) / max(hd, 0.0001), 6.0);
+            float hh_g = (c.b - c.r) / max(hd, 0.0001) + 2.0;
+            float hh_b = (c.r - c.g) / max(hd, 0.0001) + 4.0;
+            float hh = (hh_r * is_r + hh_g * is_g + hh_b * is_b) / 6.0;
+            hh = mix(hh, 0.0, step(hd, 0.0001));
+            hh = fract(hh + HH);
             float hs = clamp(hd / max(1.0 - abs(2.0 * hl - 1.0), 0.0001) * HS2, 0.0, 1.0);
             float hl2 = clamp(hl * HL, 0.0, 1.0);
             float hc = (1.0 - abs(2.0 * hl2 - 1.0)) * hs;

@@ -1174,6 +1174,14 @@ const vec3 LUMA_BT709 = vec3(0.2126, 0.7152, 0.0722);
     }
 #endif
 
+#ifdef ENABLE_AGX_TONEMAP
+    vec3 agx_contrast(vec3 x) {
+        vec3 x2 = x * x;
+        vec3 x4 = x2 * x2;
+        return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4
+             - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+    }
+#endif
 #ifdef ENABLE_UCHIMURA_TONEMAP
     float uchi_map(float x) {
         const float P = 1.0;
@@ -2222,7 +2230,7 @@ void main() {
             vec3 td = th - c;
             float tm = dot(td, td);
             float tw = TS * (1.0 - clamp(tm * TM2, 0.0, 1.0));
-            c = mix(c, th + td * tw, tw);
+            c = clamp(mix(c, th + td * tw, tw), 0.0, 1.0);
         }
     #endif
 
@@ -2307,7 +2315,7 @@ void main() {
     #endif
 
     #ifdef ENABLE_LINEAR_EXPOSURE
-        c = c * 1.0;
+        c = c * 1.3;
     #endif
 
     #ifdef ENABLE_ACES_TONEMAP
@@ -2324,16 +2332,21 @@ void main() {
 
     #ifdef ENABLE_AGX_TONEMAP
         {
+            const mat3 AGX_IN = mat3(
+                0.842479062253094, 0.0423282422610123, 0.0423756549057051,
+                0.0784335999999992, 0.878468636469772, 0.0784336,
+                0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+            const mat3 AGX_OUT = mat3(
+                1.19687900512017, -0.0528968517574562, -0.0529716355144438,
+                -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
+                -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
             const float MN = -12.47393;
             const float MX = 4.026069;
-            const float C0 = 0.1;
-            const float C1 = 0.8;
-            const float C2 = 0.3;
-            const float C3 = -0.2;
-            vec3 av = clamp((log2(max(c, vec3(0.0001))) - MN) / max(MX - MN, 0.0001), 0.0, 1.0);
-            vec3 a2 = av * av;
-            vec3 a3 = a2 * av;
-            c = clamp(C3 * a3 + C2 * a2 + C1 * av + vec3(C0), 0.0, 1.0);
+            vec3 av = AGX_IN * c;
+            av = clamp(log2(max(av, vec3(0.0001))), MN, MX);
+            av = (av - MN) / (MX - MN);
+            av = agx_contrast(av);
+            c = clamp(AGX_OUT * av, 0.0, 1.0);
         }
     #endif
 
@@ -2381,11 +2394,18 @@ void main() {
 
     #ifdef ENABLE_KHRONOS_TONEMAP
         {
-            const float KS = 0.8;
-            float kp = max(max(c.r, c.g), c.b);
-            float kn = kp / max(KS + kp - KS * 2.0 + 1.0 - KS, 0.0001);
-            float kf = mix(1.0, kn / max(kp, 0.0001), step(KS, kp));
-            c = clamp(c * kf, 0.0, 1.0);
+            const float KSC = 0.76;
+            const float KDS = 0.15;
+            float kx = min(c.r, min(c.g, c.b));
+            float ko = mix(0.04, kx - 6.25 * kx * kx, step(kx, 0.08));
+            c -= ko;
+            float kp = max(c.r, max(c.g, c.b));
+            float kd = 1.0 - KSC;
+            float knp = 1.0 - kd * kd / max(kp + kd - KSC, 0.0001);
+            float kgate = step(KSC, kp);
+            c *= mix(1.0, knp / max(kp, 0.0001), kgate);
+            float kg = 1.0 - 1.0 / max(KDS * (kp - knp) + 1.0, 0.0001);
+            c = clamp(mix(c, vec3(knp), kgate * kg), 0.0, 1.0);
         }
     #endif
 

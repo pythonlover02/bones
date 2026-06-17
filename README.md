@@ -117,13 +117,15 @@ To stage into a directory (e.g. for packaging):
 
 If Flatpak extensions were built beforehand (via `make flatpak` or `make release`) they are installed per‑user for the invoking user as part of `sudo make install`.
 
-### Integrated install (for Proton forks and custom launchers)
+### Integrated build (for Proton forks and custom launchers)
 
-If you only need the library and manifest (no launcher) — for example to wire Bones into a Proton fork's own launch script — use:
+If you only need the library and manifest (no launcher) for example to wire Bones into a Proton forks own launch script use:
 
-    sudo make integrated
+    make integrated
 
-This installs only `libbones.so` and `VkLayer_bones.json` into `/usr/local/lib/bones/`. Your launcher is then responsible for setting `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS`.
+This builds the library (via `cargo build --release`) and copies `VkLayer_bones.json` into the same directory as `libbones.so` (`target/release/`). No files are installed to system locations. Your launcher is then responsible for setting `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to point to this build directory or to the DIR where you copy the lib and layer.
+
+This is done to decouple the manifest from the repo source layout. Even if the manifest file is later moved into a subfolder (e.g., `layer/`), the `integrated` target will still place it in `target/release/`, so your build output stays consistent and doesnt breaks.
 
 ### Uninstalling
 
@@ -141,7 +143,7 @@ Runs `cargo clean` and removes built Flatpak bundles and the `.flatpak-work/` st
 
 ## Flatpak
 
-Flatpak applications run inside a sandbox and cannot see `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, or `VK_INSTANCE_LAYERS` set on the host — those environment variables do not cross the sandbox boundary. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox. The wrapper sets the activation environment **from inside** the sandbox, which is the only place it survives.
+Flatpak applications run inside a sandbox and cannot see `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, or `VK_INSTANCE_LAYERS` set on the host those environment variables do not cross the sandbox boundary. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox. The wrapper sets the activation environment **from inside** the sandbox, which is the only place it survives.
 
 Extensions are built for the following runtime versions: `23.08`, `24.08`, `25.08`.
 
@@ -210,7 +212,7 @@ This requires the Bones Flatpak extension matching the game's runtime to be inst
 
 ### Profiles
 
-A profile is a named configuration stored in `~/.config/bones/<name>-config.toml`. The default profile is `bones` (file `bones-config.toml`). On this example it will do and load `~/.config/bones/retro-config.toml`
+A profile is a named configuration stored in `~/.config/bones/<name>-config.toml`. The default profile is `bones` (file `bones-config.toml`). On this example it will do and load `~/.config/bones/retro-config.toml`.
 
     bones retro -- ~/games/retro-game
 
@@ -224,11 +226,11 @@ Instead of a config file, you can pass enabled effects directly through the `BON
 
     BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/games/game
 
-- Setting `BONES_CONFIG` — even to an empty string — takes over from the file. An empty value means "no effects", useful to force a clean pass.
+- Setting `BONES_CONFIG` even to an empty string takes over from the file. An empty value means "no effects", useful to force a clean pass.
 - Unknown effect names are ignored with a warning.
 - Hot reload is always off when `BONES_CONFIG` is used.
 
-This is ideal for reproducible launches and for integrating Bones into other launchers without managing config files. It also works with Flatpak — pass it on the `bones -- flatpak run …` command line and it is forwarded into the sandbox.
+This is ideal for reproducible launches and for integrating Bones into other launchers without managing config files. It also works with Flatpak pass it on the `bones -- flatpak run …` command line and it is forwarded into the sandbox.
 
 ### Hot Reload
 

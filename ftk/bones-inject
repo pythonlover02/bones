@@ -1,0 +1,4 @@
+#!/bin/sh
+export LD_PRELOAD="/usr/lib/extensions/vulkan/bones/lib/libbones.so${LD_PRELOAD:+:$LD_PRELOAD}"
+export VK_ADD_LAYER_PATH="/usr/lib/extensions/vulkan/bones/share/vulkan/implicit_layer.d${VK_ADD_LAYER_PATH:+:$VK_ADD_LAYER_PATH}"
+exec "$@"

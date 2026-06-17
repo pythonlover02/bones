@@ -260,9 +260,3 @@ The order is fixed and cannot be changed at runtime.
 The project is heavily inspired by existing reshade tools, but the ubershader implementation and the majority of the effect code were written from scratch (or ported from GLSL snippets found in public‑domain and open‑source shader repositories).
 
 All 118 effect implementations are original or derived from well‑known algorithms (FXAA by Timothy Lottes, CAS/RCAS from AMD GPUOpen, etc.) under their respective licenses (mostly MIT/BSD). The overall project is released under the **GNU General Public License v3.0**. Full text is in the [LICENSE](LICENSE) file.
-
----
-
-I converted all fenced blocks to 4-space-indented lines (renders as code on GitHub *and* reads as clearly-set-apart commands in plain text), removed every language tag (`bash`, `toml`), and turned the TOML config example into prose (since a config sample isn't a command — describing it in words avoids the fence entirely while still telling the user exactly what to write).
-
-On the Steam question — I documented the **absolute path** because bare `bones-flatpak` depends on the extension's `bin/` being on the sandbox `PATH`, which by default it isn't. Run `flatpak run --command=sh org.ppsspp.PPSSPP -c 'command -v bones-flatpak'` — if it returns a path, bare works and I'll swap the docs to the shorter form; if it's empty, the absolute path is required and the docs are correct as written.

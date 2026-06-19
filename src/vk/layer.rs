@@ -72,6 +72,7 @@ fn vk_hooked_symbol(name: &str) -> Option<*mut c_void> {
         "vkDestroySwapchainKHR" => Some(vkDestroySwapchainKHR as *mut c_void),
         "vkQueuePresentKHR" => Some(vkQueuePresentKHR as *mut c_void),
         "vkGetDeviceQueue" => Some(bones_GetDeviceQueue as *mut c_void),
+        "vkGetDeviceQueue2" => Some(bones_GetDeviceQueue2 as *mut c_void),
         _ => None,
     }
 }
@@ -176,6 +177,17 @@ unsafe extern "system" fn bones_GetDeviceQueue(dev: vk::Device, qfam: u32, qidx:
             *out = q;
         }
         None => log_at(LogLevel::Warn, "GetDeviceQueue on unregistered device"),
+    }
+}
+
+unsafe extern "system" fn bones_GetDeviceQueue2(dev: vk::Device, info: *const vk::DeviceQueueInfo2, out: *mut vk::Queue) {
+    match devs_get(dev.as_raw()) {
+        Some(d) => {
+            let q = d.device.get_device_queue2(&*info);
+            queue_dev_put(q.as_raw(), dev.as_raw());
+            *out = q;
+        }
+        None => log_at(LogLevel::Warn, "GetDeviceQueue2 on unregistered device"),
     }
 }
 
@@ -286,6 +298,7 @@ unsafe extern "system" fn vkDestroySwapchainKHR(
     sc: vk::SwapchainKHR,
     alloc: *const vk::AllocationCallbacks,
 ) {
+    pending_del(sc.as_raw());
     let st = swap_del(sc.as_raw());
     match (devs_get(dev.as_raw()), st) {
         (Some(d), Some(s)) => {
@@ -307,6 +320,7 @@ fn present_has_fx(info: *const vk::PresentInfoKHR, s: &Settings, reg: &[EffectDe
 
 unsafe extern "system" fn vkQueuePresentKHR(queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
     maybe_reload();
+    retry_pending_registrations();
     match (queue_owner(queue), present_has_fx(info, &ensure_settings(), &REGISTRY)) {
         (Some(d), true) => run_vk_present_chain(&d, queue, info),
         (Some(d), false) => call_real_queue_present(&d, queue, info),

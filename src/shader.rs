@@ -15,6 +15,7 @@ use crate::logging::LogLevel;
 
 static SHADER_GL: RwLock<Option<String>> = RwLock::new(None);
 static SHADER_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
+static VERT_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
 pub(crate) static GENERATION: AtomicI32 = AtomicI32::new(0);
 
 enum LineClass {
@@ -102,8 +103,27 @@ fn compile_vk_spirv(vk_src: &str, kind: shaderc::ShaderKind) -> Result<Vec<u32>,
     new_compiler().and_then(|c| new_compile_options().and_then(|o| run_compile(&c, &o, vk_src, kind)))
 }
 
-pub(crate) fn compile_vert_spirv() -> Result<Vec<u32>, ()> {
+fn cached_vert_spirv() -> Option<Vec<u32>> {
+    VERT_SPV.read().ok().and_then(|g| g.clone())
+}
+
+fn store_vert_spirv(v: Vec<u32>) {
+    match VERT_SPV.write() {
+        Ok(mut g) => *g = Some(v),
+        Err(_) => (),
+    }
+}
+
+fn compile_and_cache_vert() -> Result<Vec<u32>, ()> {
     compile_vk_spirv(VERT_VK_SRC, shaderc::ShaderKind::Vertex)
+        .map(|v| { store_vert_spirv(v.clone()); v })
+}
+
+pub(crate) fn compile_vert_spirv() -> Result<Vec<u32>, ()> {
+    match cached_vert_spirv() {
+        Some(v) => Ok(v),
+        None => compile_and_cache_vert(),
+    }
 }
 
 pub(crate) fn compile_frag_spirv(vk_src: &str) -> Result<Vec<u32>, ()> {

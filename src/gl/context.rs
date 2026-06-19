@@ -60,6 +60,54 @@ pub(crate) fn ctx_store(key: u64, st: CtxState) {
     }
 }
 
+pub(crate) fn ctx_remove(key: u64) -> Option<CtxState> {
+    CTXS.lock().ok().and_then(|mut g| g.get_or_insert_with(HashMap::new).remove(&key))
+}
+
+fn delete_vao_vbo(vbo: u32, vao: u32) {
+    let f = gl_fns();
+    unsafe {
+        (f.delete_buffers)(1, &vbo);
+        (f.delete_vertex_arrays)(1, &vao);
+    }
+}
+
+pub(crate) fn destroy_ctx_state(mut st: CtxState) {
+    destroy_targets(&mut st);
+    delete_vao_vbo(st.vbo, st.vao);
+    call_delete_program_if_exists(st.program);
+    log_at(LogLevel::Info, "gl context destroyed, postfx resources freed");
+}
+
+static DISPLAY_CTXS: Mutex<Option<HashMap<u64, Vec<u64>>>> = Mutex::new(None);
+
+pub(crate) fn display_ctx_add(dpy: u64, ctx: u64) {
+    match DISPLAY_CTXS.lock() {
+        Ok(mut g) => {
+            g.get_or_insert_with(HashMap::new)
+                .entry(dpy)
+                .or_insert_with(Vec::new)
+                .push(ctx);
+        }
+        Err(_) => (),
+    }
+}
+
+pub(crate) fn display_ctx_remove(dpy: u64, ctx: u64) {
+    match DISPLAY_CTXS.lock() {
+        Ok(mut g) => {
+            g.as_mut().map(|m| m.get_mut(&dpy).map(|v| v.retain(|c| *c != ctx)));
+        }
+        Err(_) => (),
+    }
+}
+
+pub(crate) fn display_ctx_drain(dpy: u64) -> Vec<u64> {
+    DISPLAY_CTXS.lock().ok()
+        .and_then(|mut g| g.as_mut().and_then(|m| m.remove(&dpy)))
+        .unwrap_or_default()
+}
+
 fn compile_gl_shader(kind: u32, src: &str) -> Option<u32> {
     let f = gl_fns();
     let sh = unsafe { (f.create_shader)(kind) };

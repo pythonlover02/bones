@@ -119,7 +119,7 @@ pub(crate) fn setup_watch(s: &Settings) {
 pub(crate) fn maybe_reload() {
     match poll_dirty() {
         true => {
-            let s = read_config(&config_path(&profile_name()));
+            let s = read_config(&config_path(&profile_name()), &REGISTRY);
             let (gl, spv) = build_shaders(&s, &REGISTRY);
             apply_reload(s, gl, spv, &REGISTRY);
         }

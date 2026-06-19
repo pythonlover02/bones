@@ -13,6 +13,7 @@ use crate::shader::current_spv;
 use crate::shader::GENERATION;
 
 use super::device::VkDevState;
+use super::device::devs_get;
 use super::memory::create_offscreen_image;
 use super::pipeline::*;
 
@@ -79,6 +80,69 @@ where
     F: FnOnce(&mut VkSwapState) -> R,
 {
     SWAP_FX.lock().ok().and_then(|mut g| g.as_mut().and_then(|m| m.get_mut(&sc).map(f)))
+}
+
+struct PendingSwapInfo {
+    device_raw: u64,
+    format: vk::Format,
+    extent: vk::Extent2D,
+}
+
+static PENDING_FX: Mutex<Option<HashMap<u64, PendingSwapInfo>>> = Mutex::new(None);
+
+fn pending_put(sc: u64, info: PendingSwapInfo) {
+    match PENDING_FX.lock() {
+        Ok(mut g) => { g.get_or_insert_with(HashMap::new).insert(sc, info); }
+        Err(_) => (),
+    }
+}
+
+pub(crate) fn pending_del(sc: u64) {
+    match PENDING_FX.lock() {
+        Ok(mut g) => { g.as_mut().map(|m| m.remove(&sc)); }
+        Err(_) => (),
+    }
+}
+
+fn pending_drain() -> Vec<(u64, PendingSwapInfo)> {
+    PENDING_FX.lock().ok()
+        .and_then(|mut g| g.as_mut().map(|m| m.drain().collect()))
+        .unwrap_or_default()
+}
+
+fn pending_drain_if_spv_ready() -> Vec<(u64, PendingSwapInfo)> {
+    match current_spv().is_empty() {
+        true => Vec::new(),
+        false => pending_drain(),
+    }
+}
+
+fn build_retry_ci(info: &PendingSwapInfo) -> vk::SwapchainCreateInfoKHR {
+    vk::SwapchainCreateInfoKHR {
+        image_format: info.format,
+        image_extent: info.extent,
+        ..Default::default()
+    }
+}
+
+fn attempt_pending_registration(sc_raw: u64, info: PendingSwapInfo) {
+    match devs_get(info.device_raw) {
+        Some(dev) => {
+            let ci = build_retry_ci(&info);
+            match build_swap_state(&dev, vk::Device::from_raw(info.device_raw), vk::SwapchainKHR::from_raw(sc_raw), &ci) {
+                Ok(st) => {
+                    swap_put(sc_raw, st);
+                    log_at(LogLevel::Info, "pending swapchain registered for postfx");
+                }
+                Err(()) => pending_put(sc_raw, info),
+            }
+        }
+        None => (),
+    }
+}
+
+pub(crate) fn retry_pending_registrations() {
+    pending_drain_if_spv_ready().into_iter().for_each(|(sc_raw, info)| attempt_pending_registration(sc_raw, info));
 }
 
 fn fmt_unorm(format: vk::Format) -> vk::Format {
@@ -302,7 +366,14 @@ fn try_register_postfx(d: &VkDevState, dev: vk::Device, sc: vk::SwapchainKHR, ci
             swap_put(sc.as_raw(), st);
             log_at(LogLevel::Info, "swapchain registered for postfx");
         }
-        Err(()) => log_at(LogLevel::Warn, "swapchain postfx setup failed, presenting untouched"),
+        Err(()) => {
+            pending_put(sc.as_raw(), PendingSwapInfo {
+                device_raw: dev.as_raw(),
+                format: ci.image_format,
+                extent: ci.image_extent,
+            });
+            log_at(LogLevel::Warn, "swapchain postfx setup failed, queued for retry");
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 use ash::vk;
 use ash::vk::Handle;
 
+use crate::consts::FENCE_TIMEOUT_NS;
 use crate::consts::PUSH_BYTES;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
@@ -186,9 +187,22 @@ fn record_postfx_commands(dev: &VkDevState, frame: &PostfxFrame) {
 
 fn call_wait_and_reset_fence(dev: &VkDevState, fence: vk::Fence) {
     unsafe {
-        let _ = dev.device.wait_for_fences(&[fence], true, u64::MAX);
+        let _ = dev.device.wait_for_fences(&[fence], true, FENCE_TIMEOUT_NS);
         let _ = dev.device.reset_fences(&[fence]);
     }
+}
+
+fn call_reset_command_buffer(dev: &VkDevState, cb: vk::CommandBuffer) {
+    unsafe { let _ = dev.device.reset_command_buffer(cb, vk::CommandBufferResetFlags::empty()); }
+}
+
+fn signal_fence_empty(dev: &VkDevState, queue: vk::Queue, fence: vk::Fence) {
+    unsafe { let _ = dev.device.queue_submit(queue, &[vk::SubmitInfo::default()], fence); }
+}
+
+fn recover_submit_failure(dev: &VkDevState, queue: vk::Queue, cb: vk::CommandBuffer, fence: vk::Fence) {
+    call_reset_command_buffer(dev, cb);
+    signal_fence_empty(dev, queue, fence);
 }
 
 fn submit_postfx(
@@ -214,6 +228,7 @@ fn submit_postfx(
         Ok(()) => vec![done],
         Err(_) => {
             log_at(LogLevel::Error, "postfx submit failed, passing original waits through");
+            recover_submit_failure(dev, queue, cb, fence);
             waits
         }
     }

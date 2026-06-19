@@ -61,8 +61,9 @@ pub(crate) struct GlFns {
     pub(crate) get_string: unsafe extern "C" fn(u32) -> *const c_char,
     pub(crate) gen_vertex_arrays: unsafe extern "C" fn(i32, *mut u32),
     pub(crate) bind_vertex_array: unsafe extern "C" fn(u32),
+    pub(crate) delete_buffers: unsafe extern "C" fn(i32, *const u32),
+    pub(crate) delete_vertex_arrays: unsafe extern "C" fn(i32, *const u32),
 }
-
 pub(crate) fn gl_fns() -> &'static GlFns {
     reals().gl_fns.get_or_init(|| unsafe {
         GlFns {
@@ -122,6 +123,8 @@ pub(crate) fn gl_fns() -> &'static GlFns {
             get_string: mem::transmute(gl_lookup("glGetString")),
             gen_vertex_arrays: mem::transmute(gl_lookup("glGenVertexArrays")),
             bind_vertex_array: mem::transmute(gl_lookup("glBindVertexArray")),
+            delete_buffers: mem::transmute(gl_lookup("glDeleteBuffers")),
+            delete_vertex_arrays: mem::transmute(gl_lookup("glDeleteVertexArrays")),
         }
     })
 }

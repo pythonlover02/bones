@@ -10,15 +10,24 @@ use crate::interpose::call_egl_current_ctx;
 use crate::interpose::call_egl_surface_size;
 use crate::interpose::call_glx_current_ctx;
 use crate::interpose::call_glx_drawable_size;
+use crate::interpose::call_real_egl_create_context;
+use crate::interpose::call_real_egl_destroy_context;
 use crate::interpose::call_real_egl_swap;
 use crate::interpose::call_real_egl_swap_damage_ext;
 use crate::interpose::call_real_egl_swap_damage_khr;
+use crate::interpose::call_real_egl_terminate;
+use crate::interpose::call_real_glx_destroy_context;
 use crate::interpose::call_real_glx_swap;
 use crate::watch::maybe_reload;
 
 use super::context::ctx_ready;
+use super::context::ctx_remove;
 use super::context::ctx_store;
 use super::context::ctx_take;
+use super::context::destroy_ctx_state;
+use super::context::display_ctx_add;
+use super::context::display_ctx_drain;
+use super::context::display_ctx_remove;
 use super::context::ensure_ctx_caps;
 use super::postfx::draw_postfx_gl;
 use super::postfx::restore_gl_state;
@@ -99,4 +108,37 @@ pub unsafe extern "C" fn eglSwapBuffersWithDamageKHR(
         true => { run_postfx_egl(dpy, surf); call_real_egl_swap_damage_khr(dpy, surf, ptr::null(), 0) }
         false => call_real_egl_swap_damage_khr(dpy, surf, rects, n),
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glXDestroyContext(dpy: *mut c_void, ctx: *mut c_void) {
+    ctx_remove(ctx as u64).into_iter().for_each(destroy_ctx_state);
+    call_real_glx_destroy_context(dpy, ctx);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglCreateContext(dpy: *mut c_void, config: *mut c_void, share: *mut c_void, attribs: *const i32) -> *mut c_void {
+    let ctx = call_real_egl_create_context(dpy, config, share, attribs);
+    match ctx.is_null() {
+        true => ctx,
+        false => {
+            display_ctx_add(dpy as u64, ctx as u64);
+            ctx
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglDestroyContext(dpy: *mut c_void, ctx: *mut c_void) -> u32 {
+    display_ctx_remove(dpy as u64, ctx as u64);
+    ctx_remove(ctx as u64).into_iter().for_each(destroy_ctx_state);
+    call_real_egl_destroy_context(dpy, ctx)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglTerminate(dpy: *mut c_void) -> u32 {
+    display_ctx_drain(dpy as u64).into_iter()
+        .filter_map(ctx_remove)
+        .for_each(destroy_ctx_state);
+    call_real_egl_terminate(dpy)
 }

@@ -10,6 +10,8 @@ use crate::consts::EGL_HEIGHT;
 use crate::consts::EGL_WIDTH;
 use crate::consts::GLX_HEIGHT;
 use crate::consts::GLX_WIDTH;
+use crate::logging::log_at;
+use crate::logging::LogLevel;
 use crate::util::cstr_to_str;
 
 pub(crate) type DlsymFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void;
@@ -20,19 +22,27 @@ pub(crate) type GpaFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
 type CurrentFn = unsafe extern "C" fn() -> *mut c_void;
 pub(crate) type GlxQueryDrawableFn = unsafe extern "C" fn(*mut c_void, libc::c_ulong, i32, *mut u32);
 pub(crate) type EglQuerySurfaceFn = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32;
+pub(crate) type GlxDestroyContextFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
+pub(crate) type EglDestroyContextFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32;
+pub(crate) type EglCreateContextFn = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void;
+pub(crate) type EglTerminateFn = unsafe extern "C" fn(*mut c_void) -> u32;
 
 #[derive(Default)]
 pub(crate) struct Reals {
-    pub(crate) glx_swap: OnceLock<GlxSwapFn>,
-    pub(crate) egl_swap: OnceLock<EglSwapFn>,
-    pub(crate) egl_swap_damage_ext: OnceLock<EglSwapDamageFn>,
-    pub(crate) egl_swap_damage_khr: OnceLock<EglSwapDamageFn>,
-    pub(crate) glx_gpa: OnceLock<GpaFn>,
-    pub(crate) egl_gpa: OnceLock<GpaFn>,
-    glx_get_current: OnceLock<CurrentFn>,
-    egl_get_current: OnceLock<CurrentFn>,
-    pub(crate) glx_query_drawable: OnceLock<GlxQueryDrawableFn>,
-    pub(crate) egl_query_surface: OnceLock<EglQuerySurfaceFn>,
+    pub(crate) glx_swap: OnceLock<Option<GlxSwapFn>>,
+    pub(crate) egl_swap: OnceLock<Option<EglSwapFn>>,
+    pub(crate) egl_swap_damage_ext: OnceLock<Option<EglSwapDamageFn>>,
+    pub(crate) egl_swap_damage_khr: OnceLock<Option<EglSwapDamageFn>>,
+    pub(crate) glx_gpa: OnceLock<Option<GpaFn>>,
+    pub(crate) egl_gpa: OnceLock<Option<GpaFn>>,
+    glx_get_current: OnceLock<Option<CurrentFn>>,
+    egl_get_current: OnceLock<Option<CurrentFn>>,
+    pub(crate) glx_query_drawable: OnceLock<Option<GlxQueryDrawableFn>>,
+    pub(crate) egl_query_surface: OnceLock<Option<EglQuerySurfaceFn>>,
+    pub(crate) glx_destroy_context: OnceLock<Option<GlxDestroyContextFn>>,
+    pub(crate) egl_destroy_context: OnceLock<Option<EglDestroyContextFn>>,
+    pub(crate) egl_create_context: OnceLock<Option<EglCreateContextFn>>,
+    pub(crate) egl_terminate: OnceLock<Option<EglTerminateFn>>,
     pub(crate) gl_fns: OnceLock<crate::gl::fns::GlFns>,
 }
 
@@ -76,65 +86,185 @@ pub(crate) fn reals() -> &'static Reals {
     REALS.get_or_init(Reals::default)
 }
 
-pub(crate) fn real_glx_swap() -> GlxSwapFn {
-    *reals().glx_swap.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, GlxSwapFn>(lib_sym("libGLX.so.0", "glXSwapBuffers"))
+pub(crate) fn real_glx_swap() -> Option<GlxSwapFn> {
+    *reals().glx_swap.get_or_init(|| {
+        let p = lib_sym("libGLX.so.0", "glXSwapBuffers");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, GlxSwapFn>(p) }),
+        }
     })
 }
 
-pub(crate) fn real_egl_swap() -> EglSwapFn {
-    *reals().egl_swap.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, EglSwapFn>(lib_sym("libEGL.so.1", "eglSwapBuffers"))
+pub(crate) fn real_egl_swap() -> Option<EglSwapFn> {
+    *reals().egl_swap.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglSwapBuffers");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, EglSwapFn>(p) }),
+        }
     })
 }
 
-pub(crate) fn real_egl_swap_damage_ext() -> EglSwapDamageFn {
-    *reals().egl_swap_damage_ext.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, EglSwapDamageFn>(lib_sym("libEGL.so.1", "eglSwapBuffersWithDamageEXT"))
+pub(crate) fn real_egl_swap_damage_ext() -> Option<EglSwapDamageFn> {
+    *reals().egl_swap_damage_ext.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglSwapBuffersWithDamageEXT");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, EglSwapDamageFn>(p) }),
+        }
     })
 }
 
-pub(crate) fn real_egl_swap_damage_khr() -> EglSwapDamageFn {
-    *reals().egl_swap_damage_khr.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, EglSwapDamageFn>(lib_sym("libEGL.so.1", "eglSwapBuffersWithDamageKHR"))
+pub(crate) fn real_egl_swap_damage_khr() -> Option<EglSwapDamageFn> {
+    *reals().egl_swap_damage_khr.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglSwapBuffersWithDamageKHR");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, EglSwapDamageFn>(p) }),
+        }
     })
 }
 
-pub(crate) fn real_glx_gpa() -> GpaFn {
-    *reals().glx_gpa.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, GpaFn>(lib_sym("libGLX.so.0", "glXGetProcAddressARB"))
+pub(crate) fn real_glx_gpa() -> Option<GpaFn> {
+    *reals().glx_gpa.get_or_init(|| {
+        let p = lib_sym("libGLX.so.0", "glXGetProcAddressARB");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, GpaFn>(p) }),
+        }
     })
 }
 
-pub(crate) fn real_egl_gpa() -> GpaFn {
-    *reals().egl_gpa.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, GpaFn>(lib_sym("libEGL.so.1", "eglGetProcAddress"))
+pub(crate) fn real_egl_gpa() -> Option<GpaFn> {
+    *reals().egl_gpa.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglGetProcAddress");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, GpaFn>(p) }),
+        }
+    })
+}
+
+fn real_glx_destroy_context() -> Option<GlxDestroyContextFn> {
+    *reals().glx_destroy_context.get_or_init(|| {
+        let p = lib_sym("libGLX.so.0", "glXDestroyContext");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, GlxDestroyContextFn>(p) }),
+        }
+    })
+}
+
+fn real_egl_destroy_context() -> Option<EglDestroyContextFn> {
+    *reals().egl_destroy_context.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglDestroyContext");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, EglDestroyContextFn>(p) }),
+        }
     })
 }
 
 pub(crate) fn call_real_glx_gpa(name: *const c_char) -> *mut c_void {
-    unsafe { (real_glx_gpa())(name) }
+    match real_glx_gpa() {
+        Some(f) => unsafe { f(name) },
+        None => ptr::null_mut(),
+    }
 }
 
 pub(crate) fn call_real_egl_gpa(name: *const c_char) -> *mut c_void {
-    unsafe { (real_egl_gpa())(name) }
+    match real_egl_gpa() {
+        Some(f) => unsafe { f(name) },
+        None => ptr::null_mut(),
+    }
 }
 
 pub(crate) fn call_real_glx_swap(dpy: *mut c_void, drawable: libc::c_ulong) {
-    unsafe { (real_glx_swap())(dpy, drawable) }
+    match real_glx_swap() {
+        Some(f) => unsafe { f(dpy, drawable) },
+        None => log_at(LogLevel::Error, "glXSwapBuffers unavailable, frame dropped"),
+    }
 }
 
 pub(crate) fn call_real_egl_swap(dpy: *mut c_void, surface: *mut c_void) -> u32 {
-    unsafe { (real_egl_swap())(dpy, surface) }
+    match real_egl_swap() {
+        Some(f) => unsafe { f(dpy, surface) },
+        None => {
+            log_at(LogLevel::Error, "eglSwapBuffers unavailable, frame dropped");
+            0
+        }
+    }
 }
 
 pub(crate) fn call_real_egl_swap_damage_ext(dpy: *mut c_void, surf: *mut c_void, rects: *const i32, n: i32) -> u32 {
-    unsafe { (real_egl_swap_damage_ext())(dpy, surf, rects, n) }
+    match real_egl_swap_damage_ext() {
+        Some(f) => unsafe { f(dpy, surf, rects, n) },
+        None => {
+            log_at(LogLevel::Error, "eglSwapBuffersWithDamageEXT unavailable, frame dropped");
+            0
+        }
+    }
 }
 
 pub(crate) fn call_real_egl_swap_damage_khr(dpy: *mut c_void, surf: *mut c_void, rects: *const i32, n: i32) -> u32 {
-    unsafe { (real_egl_swap_damage_khr())(dpy, surf, rects, n) }
+    match real_egl_swap_damage_khr() {
+        Some(f) => unsafe { f(dpy, surf, rects, n) },
+        None => {
+            log_at(LogLevel::Error, "eglSwapBuffersWithDamageKHR unavailable, frame dropped");
+            0
+        }
+    }
 }
+
+pub(crate) fn call_real_glx_destroy_context(dpy: *mut c_void, ctx: *mut c_void) {
+    match real_glx_destroy_context() {
+        Some(f) => unsafe { f(dpy, ctx) },
+        None => (),
+    }
+}
+
+pub(crate) fn call_real_egl_destroy_context(dpy: *mut c_void, ctx: *mut c_void) -> u32 {
+    match real_egl_destroy_context() {
+        Some(f) => unsafe { f(dpy, ctx) },
+        None => 0,
+    }
+}
+
+fn real_egl_create_context() -> Option<EglCreateContextFn> {
+    *reals().egl_create_context.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglCreateContext");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, EglCreateContextFn>(p) }),
+        }
+    })
+}
+
+fn real_egl_terminate() -> Option<EglTerminateFn> {
+    *reals().egl_terminate.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglTerminate");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, EglTerminateFn>(p) }),
+        }
+    })
+}
+
+pub(crate) fn call_real_egl_create_context(dpy: *mut c_void, config: *mut c_void, share: *mut c_void, attribs: *const i32) -> *mut c_void {
+    match real_egl_create_context() {
+        Some(f) => unsafe { f(dpy, config, share, attribs) },
+        None => ptr::null_mut(),
+    }
+}
+
+pub(crate) fn call_real_egl_terminate(dpy: *mut c_void) -> u32 {
+    match real_egl_terminate() {
+        Some(f) => unsafe { f(dpy) },
+        None => 0,
+    }
+}
+
 
 pub(crate) fn gl_lookup(name: &str) -> *mut c_void {
     let c = CString::new(name).unwrap_or_default();
@@ -152,41 +282,69 @@ pub(crate) fn gl_lookup(name: &str) -> *mut c_void {
 }
 
 pub(crate) fn call_glx_current_ctx() -> *mut c_void {
-    let f = *reals().glx_get_current.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, CurrentFn>(lib_sym("libGLX.so.0", "glXGetCurrentContext"))
+    let f = *reals().glx_get_current.get_or_init(|| {
+        let p = lib_sym("libGLX.so.0", "glXGetCurrentContext");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, CurrentFn>(p) }),
+        }
     });
-    unsafe { f() }
+    match f {
+        Some(real) => unsafe { real() },
+        None => ptr::null_mut(),
+    }
 }
 
 pub(crate) fn call_egl_current_ctx() -> *mut c_void {
-    let f = *reals().egl_get_current.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, CurrentFn>(lib_sym("libEGL.so.1", "eglGetCurrentContext"))
+    let f = *reals().egl_get_current.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglGetCurrentContext");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, CurrentFn>(p) }),
+        }
     });
-    unsafe { f() }
+    match f {
+        Some(real) => unsafe { real() },
+        None => ptr::null_mut(),
+    }
 }
 
 pub(crate) fn call_glx_drawable_size(dpy: *mut c_void, drawable: libc::c_ulong) -> (i32, i32) {
-    let f = *reals().glx_query_drawable.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, GlxQueryDrawableFn>(lib_sym("libGLX.so.0", "glXQueryDrawable"))
+    let f = *reals().glx_query_drawable.get_or_init(|| {
+        let p = lib_sym("libGLX.so.0", "glXQueryDrawable");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, GlxQueryDrawableFn>(p) }),
+        }
     });
     let mut w: u32 = 0;
     let mut h: u32 = 0;
-    unsafe {
-        f(dpy, drawable, GLX_WIDTH, &mut w);
-        f(dpy, drawable, GLX_HEIGHT, &mut h);
+    match f {
+        Some(real) => unsafe {
+            real(dpy, drawable, GLX_WIDTH, &mut w);
+            real(dpy, drawable, GLX_HEIGHT, &mut h);
+        },
+        None => (),
     }
     (w as i32, h as i32)
 }
 
 pub(crate) fn call_egl_surface_size(dpy: *mut c_void, surf: *mut c_void) -> (i32, i32) {
-    let f = *reals().egl_query_surface.get_or_init(|| unsafe {
-        mem::transmute::<*mut c_void, EglQuerySurfaceFn>(lib_sym("libEGL.so.1", "eglQuerySurface"))
+    let f = *reals().egl_query_surface.get_or_init(|| {
+        let p = lib_sym("libEGL.so.1", "eglQuerySurface");
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, EglQuerySurfaceFn>(p) }),
+        }
     });
     let mut w: i32 = 0;
     let mut h: i32 = 0;
-    unsafe {
-        f(dpy, surf, EGL_WIDTH, &mut w);
-        f(dpy, surf, EGL_HEIGHT, &mut h);
+    match f {
+        Some(real) => unsafe {
+            real(dpy, surf, EGL_WIDTH, &mut w);
+            real(dpy, surf, EGL_HEIGHT, &mut h);
+        },
+        None => (),
     }
     (w, h)
 }
@@ -198,6 +356,10 @@ pub(crate) fn hooked_symbol(name: &str) -> Option<*mut c_void> {
         "eglSwapBuffers" => Some(swap::eglSwapBuffers as *mut c_void),
         "eglSwapBuffersWithDamageEXT" => Some(swap::eglSwapBuffersWithDamageEXT as *mut c_void),
         "eglSwapBuffersWithDamageKHR" => Some(swap::eglSwapBuffersWithDamageKHR as *mut c_void),
+        "glXDestroyContext" => Some(swap::glXDestroyContext as *mut c_void),
+        "eglDestroyContext" => Some(swap::eglDestroyContext as *mut c_void),
+        "eglCreateContext" => Some(swap::eglCreateContext as *mut c_void),
+        "eglTerminate" => Some(swap::eglTerminate as *mut c_void),
         "glXGetProcAddress" => Some(glXGetProcAddress as *mut c_void),
         "glXGetProcAddressARB" => Some(glXGetProcAddressARB as *mut c_void),
         "eglGetProcAddress" => Some(eglGetProcAddress as *mut c_void),

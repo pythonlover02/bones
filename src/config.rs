@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
+use std::sync::Once;
 
 use crate::consts::CONFIG_SEP;
 use crate::consts::ENV_CONFIG;
@@ -89,7 +90,13 @@ fn effects_from_list(text: &str, reg: &[EffectDef]) -> HashMap<String, bool> {
 }
 
 pub(crate) fn parse_settings(text: &str, reg: &[EffectDef]) -> Settings {
-    let doc = text.parse::<toml::Value>().unwrap_or(toml::Value::Table(toml::map::Map::new()));
+    let doc = match text.parse::<toml::Value>() {
+        Ok(d) => d,
+        Err(e) => {
+            log_at(LogLevel::Warn, &format!("config parse failed: {}, using defaults", e));
+            toml::Value::Table(toml::map::Map::new())
+        }
+    };
     let effects = effects_of(&doc, reg);
     let hot = effects.get(HOT_RELOAD_KEY).copied().unwrap_or(true);
     Settings { hot_reload: hot, effects }
@@ -151,12 +158,15 @@ pub(crate) fn resolve_settings(reg: &[EffectDef]) -> Settings {
     }
 }
 
+static INIT: Once = Once::new();
+
 pub(crate) fn ensure_settings() -> Settings {
-    let have = SETTINGS.read().ok().and_then(|g| g.clone());
-    match have {
-        Some(s) => s,
-        None => load_settings(),
-    }
+    INIT.call_once(|| {
+        load_settings();
+    });
+    SETTINGS.read().ok().and_then(|g| g.clone()).unwrap_or_else(|| {
+        load_settings()
+    })
 }
 
 pub(crate) fn load_settings() -> Settings {

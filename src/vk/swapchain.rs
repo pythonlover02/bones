@@ -46,6 +46,89 @@ pub(crate) struct VkSwapState {
     pub(crate) gen: i32,
 }
 
+struct SwapStateBuilder {
+    dev: *const VkDevState,
+    framebuffers: Vec<vk::Framebuffer>,
+    render_pass: vk::RenderPass,
+    pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
+    desc_layout: vk::DescriptorSetLayout,
+    desc_pool: vk::DescriptorPool,
+    sampler: vk::Sampler,
+    tex_input: vk::Image,
+    tex_input_mem: vk::DeviceMemory,
+    tex_input_view: vk::ImageView,
+    tex_output: vk::Image,
+    tex_output_mem: vk::DeviceMemory,
+    tex_output_view: vk::ImageView,
+    tex_history: vk::Image,
+    tex_history_mem: vk::DeviceMemory,
+    tex_history_view: vk::ImageView,
+    cmd_pool: vk::CommandPool,
+    semaphores: Vec<vk::Semaphore>,
+    fences: Vec<vk::Fence>,
+    cmd_bufs: Vec<vk::CommandBuffer>,
+    desc_sets: Vec<vk::DescriptorSet>,
+}
+
+impl Drop for SwapStateBuilder {
+    fn drop(&mut self) {
+        let dev = unsafe { &*self.dev };
+
+        if self.render_pass != vk::RenderPass::null() {
+            unsafe { dev.device.destroy_render_pass(self.render_pass, None); }
+        }
+        if self.pipeline_layout != vk::PipelineLayout::null() {
+            unsafe { dev.device.destroy_pipeline_layout(self.pipeline_layout, None); }
+        }
+        if self.pipeline != vk::Pipeline::null() {
+            unsafe { dev.device.destroy_pipeline(self.pipeline, None); }
+        }
+        if self.desc_layout != vk::DescriptorSetLayout::null() {
+            unsafe { dev.device.destroy_descriptor_set_layout(self.desc_layout, None); }
+        }
+        if self.desc_pool != vk::DescriptorPool::null() {
+            unsafe { dev.device.destroy_descriptor_pool(self.desc_pool, None); }
+        }
+        if self.sampler != vk::Sampler::null() {
+            unsafe { dev.device.destroy_sampler(self.sampler, None); }
+        }
+        if self.tex_input != vk::Image::null() {
+            unsafe {
+                dev.device.destroy_image_view(self.tex_input_view, None);
+                dev.device.destroy_image(self.tex_input, None);
+                dev.device.free_memory(self.tex_input_mem, None);
+            }
+        }
+        if self.tex_output != vk::Image::null() {
+            unsafe {
+                dev.device.destroy_image_view(self.tex_output_view, None);
+                dev.device.destroy_image(self.tex_output, None);
+                dev.device.free_memory(self.tex_output_mem, None);
+            }
+        }
+        if self.tex_history != vk::Image::null() {
+            unsafe {
+                dev.device.destroy_image_view(self.tex_history_view, None);
+                dev.device.destroy_image(self.tex_history, None);
+                dev.device.free_memory(self.tex_history_mem, None);
+            }
+        }
+        if self.cmd_pool != vk::CommandPool::null() {
+            unsafe { dev.device.destroy_command_pool(self.cmd_pool, None); }
+        }
+        self.semaphores.iter().for_each(|s| if *s != vk::Semaphore::null() {
+            unsafe { dev.device.destroy_semaphore(*s, None); }
+        });
+        self.fences.iter().for_each(|f| if *f != vk::Fence::null() {
+            unsafe { dev.device.destroy_fence(*f, None); }
+        });
+        self.framebuffers.iter().for_each(|fb| if *fb != vk::Framebuffer::null() {
+            unsafe { dev.device.destroy_framebuffer(*fb, None); }
+        });
+    }
+}
+
 static SWAP_FX: Mutex<Option<HashMap<u64, VkSwapState>>> = Mutex::new(None);
 
 pub(crate) fn swap_has(sc: u64) -> bool {
@@ -202,83 +285,212 @@ pub(crate) fn build_swap_state(
     ci: &vk::SwapchainCreateInfoKHR,
 ) -> Result<VkSwapState, ()> {
     let spv = current_spv();
-    match spv.is_empty() {
-        true => {
-            log_at(LogLevel::Error, "no spirv available, postfx disabled for swapchain");
-            return Err(());
-        }
-        false => (),
+    if spv.is_empty() {
+        log_at(LogLevel::Error, "no spirv available, postfx disabled for swapchain");
+        return Err(());
     }
     let images = call_get_swapchain_images(dev, sc)?;
     let format = fmt_unorm(ci.image_format);
     let extent = ci.image_extent;
-    let (tex_output, tex_output_mem, tex_output_view) = create_offscreen_image(dev, extent, format)?;
-    let render_pass = create_render_pass(dev, format)?;
-    let fb_ci = vk::FramebufferCreateInfo {
-        render_pass, attachment_count: 1, p_attachments: &tex_output_view,
-        width: extent.width, height: extent.height, layers: 1, ..Default::default()
+
+    let mut builder = SwapStateBuilder {
+        dev: dev as *const _,
+        framebuffers: Vec::new(),
+        render_pass: vk::RenderPass::null(),
+        pipeline_layout: vk::PipelineLayout::null(),
+        pipeline: vk::Pipeline::null(),
+        desc_layout: vk::DescriptorSetLayout::null(),
+        desc_pool: vk::DescriptorPool::null(),
+        sampler: vk::Sampler::null(),
+        tex_input: vk::Image::null(),
+        tex_input_mem: vk::DeviceMemory::null(),
+        tex_input_view: vk::ImageView::null(),
+        tex_output: vk::Image::null(),
+        tex_output_mem: vk::DeviceMemory::null(),
+        tex_output_view: vk::ImageView::null(),
+        tex_history: vk::Image::null(),
+        tex_history_mem: vk::DeviceMemory::null(),
+        tex_history_view: vk::ImageView::null(),
+        cmd_pool: vk::CommandPool::null(),
+        semaphores: Vec::new(),
+        fences: Vec::new(),
+        cmd_bufs: Vec::new(),
+        desc_sets: Vec::new(),
     };
-    let framebuffers = vec![unsafe { dev.device.create_framebuffer(&fb_ci, None) }.map_err(|_| ())?];
+
+    let (tex_output, tex_output_mem, tex_output_view) = create_offscreen_image(dev, extent, format)?;
+    builder.tex_output = tex_output;
+    builder.tex_output_mem = tex_output_mem;
+    builder.tex_output_view = tex_output_view;
+
+    let render_pass = create_render_pass(dev, format)?;
+    builder.render_pass = render_pass;
+
+    let fb_ci = vk::FramebufferCreateInfo {
+        render_pass,
+        attachment_count: 1,
+        p_attachments: &tex_output_view,
+        width: extent.width,
+        height: extent.height,
+        layers: 1,
+        ..Default::default()
+    };
+    let framebuffer = unsafe { dev.device.create_framebuffer(&fb_ci, None) }.map_err(|_| ())?;
+    builder.framebuffers = vec![framebuffer];
+
     let desc_layout = create_desc_layout(dev)?;
+    builder.desc_layout = desc_layout;
+
     let push = vk::PushConstantRange {
-        stage_flags: vk::ShaderStageFlags::FRAGMENT, offset: 0, size: PUSH_BYTES,
+        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+        offset: 0,
+        size: PUSH_BYTES,
     };
     let plci = vk::PipelineLayoutCreateInfo {
-        set_layout_count: 1, p_set_layouts: &desc_layout,
-        push_constant_range_count: 1, p_push_constant_ranges: &push, ..Default::default()
+        set_layout_count: 1,
+        p_set_layouts: &desc_layout,
+        push_constant_range_count: 1,
+        p_push_constant_ranges: &push,
+        ..Default::default()
     };
     let pipeline_layout = unsafe { dev.device.create_pipeline_layout(&plci, None) }.map_err(|_| ())?;
+    builder.pipeline_layout = pipeline_layout;
+
     let pipeline = create_pipeline(dev, pipeline_layout, render_pass, extent, &spv)?;
+    builder.pipeline = pipeline;
+
     let sci = vk::SamplerCreateInfo {
-        mag_filter: vk::Filter::LINEAR, min_filter: vk::Filter::LINEAR,
+        mag_filter: vk::Filter::LINEAR,
+        min_filter: vk::Filter::LINEAR,
         address_mode_u: vk::SamplerAddressMode::CLAMP_TO_EDGE,
         address_mode_v: vk::SamplerAddressMode::CLAMP_TO_EDGE,
-        address_mode_w: vk::SamplerAddressMode::CLAMP_TO_EDGE, ..Default::default()
+        address_mode_w: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+        ..Default::default()
     };
     let sampler = unsafe { dev.device.create_sampler(&sci, None) }.map_err(|_| ())?;
+    builder.sampler = sampler;
+
     let (tex_input, tex_input_mem, tex_input_view) = create_offscreen_image(dev, extent, format)?;
+    builder.tex_input = tex_input;
+    builder.tex_input_mem = tex_input_mem;
+    builder.tex_input_view = tex_input_view;
+
     let (tex_history, tex_history_mem, tex_history_view) = create_offscreen_image(dev, extent, format)?;
+    builder.tex_history = tex_history;
+    builder.tex_history_mem = tex_history_mem;
+    builder.tex_history_view = tex_history_view;
+
     let pool_size = vk::DescriptorPoolSize {
         ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         descriptor_count: 2 * images.len() as u32,
     };
     let dpci = vk::DescriptorPoolCreateInfo {
-        max_sets: images.len() as u32, pool_size_count: 1, p_pool_sizes: &pool_size, ..Default::default()
+        max_sets: images.len() as u32,
+        pool_size_count: 1,
+        p_pool_sizes: &pool_size,
+        ..Default::default()
     };
     let desc_pool = unsafe { dev.device.create_descriptor_pool(&dpci, None) }.map_err(|_| ())?;
+    builder.desc_pool = desc_pool;
+
     let layouts = vec![desc_layout; images.len()];
     let dsai = vk::DescriptorSetAllocateInfo {
-        descriptor_pool: desc_pool, descriptor_set_count: images.len() as u32,
-        p_set_layouts: layouts.as_ptr(), ..Default::default()
+        descriptor_pool: desc_pool,
+        descriptor_set_count: images.len() as u32,
+        p_set_layouts: layouts.as_ptr(),
+        ..Default::default()
     };
     let desc_sets = unsafe { dev.device.allocate_descriptor_sets(&dsai) }.map_err(|_| ())?;
+    builder.desc_sets = desc_sets.clone();
+
     desc_sets.iter().for_each(|ds| write_descriptors(dev, *ds, sampler, tex_input_view, tex_history_view));
+
     let cpci = vk::CommandPoolCreateInfo {
-        flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER, queue_family_index: dev.qfam, ..Default::default()
+        flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+        queue_family_index: dev.qfam,
+        ..Default::default()
     };
     let cmd_pool = unsafe { dev.device.create_command_pool(&cpci, None) }.map_err(|_| ())?;
+    builder.cmd_pool = cmd_pool;
+
     let cbai = vk::CommandBufferAllocateInfo {
-        command_pool: cmd_pool, level: vk::CommandBufferLevel::PRIMARY,
-        command_buffer_count: images.len() as u32, ..Default::default()
+        command_pool: cmd_pool,
+        level: vk::CommandBufferLevel::PRIMARY,
+        command_buffer_count: images.len() as u32,
+        ..Default::default()
     };
     let cmd_bufs = unsafe { dev.device.allocate_command_buffers(&cbai) }.map_err(|_| ())?;
+    builder.cmd_bufs = cmd_bufs.clone();
+
     let semaphores = images.iter()
-        .map(|_| unsafe { dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) }.map_err(|_| ()))
-        .collect::<Result<Vec<_>, ()>>()?;
+        .map(|_| unsafe { dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ())?;
+    builder.semaphores = semaphores.clone();
+
     let fences = images.iter()
         .map(|_| {
-            let fci = vk::FenceCreateInfo { flags: vk::FenceCreateFlags::SIGNALED, ..Default::default() };
-            unsafe { dev.device.create_fence(&fci, None) }.map_err(|_| ())
+            let fci = vk::FenceCreateInfo {
+                flags: vk::FenceCreateFlags::SIGNALED,
+                ..Default::default()
+            };
+            unsafe { dev.device.create_fence(&fci, None) }
         })
-        .collect::<Result<Vec<_>, ()>>()?;
-    Ok(VkSwapState {
-        device: dev_h, images, framebuffers, extent,
-        render_pass, pipeline_layout, pipeline, desc_layout, desc_pool, desc_sets, sampler,
-        tex_input, tex_input_mem, tex_input_view, tex_output, tex_output_mem, tex_output_view,
-        tex_history, tex_history_mem, tex_history_view, history_init: false,
-        cmd_pool, cmd_bufs, semaphores, fences,
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ())?;
+    builder.fences = fences.clone();
+
+    let final_state = VkSwapState {
+        device: dev_h,
+        images,
+        framebuffers: std::mem::take(&mut builder.framebuffers),
+        extent,
+        render_pass: builder.render_pass,
+        pipeline_layout: builder.pipeline_layout,
+        pipeline: builder.pipeline,
+        desc_layout: builder.desc_layout,
+        desc_pool: builder.desc_pool,
+        desc_sets,
+        sampler: builder.sampler,
+        tex_input: builder.tex_input,
+        tex_input_mem: builder.tex_input_mem,
+        tex_input_view: builder.tex_input_view,
+        tex_output: builder.tex_output,
+        tex_output_mem: builder.tex_output_mem,
+        tex_output_view: builder.tex_output_view,
+        tex_history: builder.tex_history,
+        tex_history_mem: builder.tex_history_mem,
+        tex_history_view: builder.tex_history_view,
+        history_init: false,
+        cmd_pool: builder.cmd_pool,
+        cmd_bufs,
+        semaphores,
+        fences,
         gen: GENERATION.load(Ordering::Relaxed),
-    })
+    };
+
+    builder.render_pass = vk::RenderPass::null();
+    builder.pipeline_layout = vk::PipelineLayout::null();
+    builder.pipeline = vk::Pipeline::null();
+    builder.desc_layout = vk::DescriptorSetLayout::null();
+    builder.desc_pool = vk::DescriptorPool::null();
+    builder.sampler = vk::Sampler::null();
+    builder.tex_input = vk::Image::null();
+    builder.tex_input_mem = vk::DeviceMemory::null();
+    builder.tex_input_view = vk::ImageView::null();
+    builder.tex_output = vk::Image::null();
+    builder.tex_output_mem = vk::DeviceMemory::null();
+    builder.tex_output_view = vk::ImageView::null();
+    builder.tex_history = vk::Image::null();
+    builder.tex_history_mem = vk::DeviceMemory::null();
+    builder.tex_history_view = vk::ImageView::null();
+    builder.cmd_pool = vk::CommandPool::null();
+    builder.semaphores.clear();
+    builder.fences.clear();
+    builder.cmd_bufs.clear();
+    builder.framebuffers.clear();
+
+    Ok(final_state)
 }
 
 fn pipeline_gen_stale(st_gen: i32, cur_gen: i32) -> bool {

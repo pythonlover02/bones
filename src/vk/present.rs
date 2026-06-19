@@ -56,14 +56,8 @@ fn call_copy_image(
 fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
     let cb = st.cmd_bufs[idx];
     let img = st.images[idx];
-    let first = st.first_use[idx];
-    st.first_use[idx] = false;
     let need_hist_init = !st.history_init;
     st.history_init = true;
-    let old_layout = match first {
-        true => vk::ImageLayout::UNDEFINED,
-        false => vk::ImageLayout::PRESENT_SRC_KHR,
-    };
     let (t, fps) = frame_time_fps();
     let push = [st.extent.width as f32, st.extent.height as f32, t, fps];
     let region = vk::ImageCopy {
@@ -87,7 +81,7 @@ fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
     }
 
     barrier(dev, cb, img,
-        old_layout, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        vk::ImageLayout::PRESENT_SRC_KHR, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
         vk::AccessFlags::MEMORY_READ, vk::AccessFlags::TRANSFER_READ,
         vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
     barrier(dev, cb, st.tex_input,
@@ -95,10 +89,7 @@ fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
         vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE,
         vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
 
-    match first {
-        true => (),
-        false => call_copy_image(dev, cb, img, st.tex_input, &region),
-    }
+    call_copy_image(dev, cb, img, st.tex_input, &region);
 
     barrier(dev, cb, st.tex_input,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,

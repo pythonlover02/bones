@@ -79,12 +79,27 @@ fn rewrite_gl_to_vk(gl: &str) -> String {
     insert_after_version(&body, VK_HEADER)
 }
 
-fn compile_vk_spirv(vk_src: &str, kind: shaderc::ShaderKind) -> Result<Vec<u32>, ()> {
-    let c = shaderc::Compiler::new().unwrap();
-    let o = shaderc::CompileOptions::new().unwrap();
-    c.compile_into_spirv(vk_src, kind, "bones.frag", "main", Some(&o))
+fn new_compiler() -> Result<shaderc::Compiler, ()> {
+    shaderc::Compiler::new().ok_or_else(|| log_at(LogLevel::Error, "shaderc compiler init failed"))
+}
+
+fn new_compile_options() -> Result<shaderc::CompileOptions<'static>, ()> {
+    shaderc::CompileOptions::new().ok_or_else(|| log_at(LogLevel::Error, "shaderc options init failed"))
+}
+
+fn run_compile(
+    c: &shaderc::Compiler,
+    o: &shaderc::CompileOptions,
+    vk_src: &str,
+    kind: shaderc::ShaderKind,
+) -> Result<Vec<u32>, ()> {
+    c.compile_into_spirv(vk_src, kind, "bones.frag", "main", Some(o))
         .map(|a| a.as_binary().to_vec())
         .map_err(|e| log_at(LogLevel::Error, &format!("spirv compile failed: {}", e)))
+}
+
+fn compile_vk_spirv(vk_src: &str, kind: shaderc::ShaderKind) -> Result<Vec<u32>, ()> {
+    new_compiler().and_then(|c| new_compile_options().and_then(|o| run_compile(&c, &o, vk_src, kind)))
 }
 
 pub(crate) fn compile_vert_spirv() -> Result<Vec<u32>, ()> {

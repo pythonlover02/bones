@@ -16,9 +16,7 @@ use super::pipeline::*;
 pub(crate) struct VkSwapState {
     pub(crate) device: vk::Device,
     pub(crate) images: Vec<vk::Image>,
-    pub(crate) views: Vec<vk::ImageView>,
     pub(crate) framebuffers: Vec<vk::Framebuffer>,
-    pub(crate) first_use: Vec<bool>,
     pub(crate) extent: vk::Extent2D,
     pub(crate) render_pass: vk::RenderPass,
     pub(crate) pipeline_layout: vk::PipelineLayout,
@@ -206,7 +204,7 @@ pub(crate) fn build_swap_state(
         })
         .collect::<Result<Vec<_>, ()>>()?;
     Ok(VkSwapState {
-        device: dev_h, first_use: vec![true; images.len()], images, views: Vec::new(), framebuffers, extent,
+        device: dev_h, images, framebuffers, extent,
         render_pass, pipeline_layout, pipeline, desc_layout, desc_pool, desc_sets, sampler,
         tex_input, tex_input_mem, tex_input_view, tex_output, tex_output_mem, tex_output_view,
         tex_history, tex_history_mem, tex_history_view, history_init: false,
@@ -236,7 +234,6 @@ pub(crate) fn destroy_swap_state(dev: &VkDevState, st: &VkSwapState) {
         dev.device.destroy_descriptor_set_layout(st.desc_layout, None);
         st.framebuffers.iter().for_each(|fb| dev.device.destroy_framebuffer(*fb, None));
         dev.device.destroy_render_pass(st.render_pass, None);
-        st.views.iter().for_each(|v| dev.device.destroy_image_view(*v, None));
     }
 }
 

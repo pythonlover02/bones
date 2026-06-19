@@ -52,6 +52,7 @@ pub(crate) fn save_gl_state() -> GlState {
         (f.get_integerv)(GL_DRAW_FRAMEBUFFER_BINDING, &mut s.draw_fbo);
         (f.get_integerv)(GL_READ_FRAMEBUFFER_BINDING, &mut s.read_fbo);
         (f.get_integerv)(GL_CURRENT_PROGRAM, &mut s.program);
+        (f.get_integerv)(GL_VERTEX_ARRAY_BINDING, &mut s.vao_binding);
         (f.get_integerv)(GL_ACTIVE_TEXTURE, &mut s.active_tex);
         (f.active_texture)(GL_TEXTURE0);
         (f.get_integerv)(GL_TEXTURE_BINDING_2D, &mut s.tex0);

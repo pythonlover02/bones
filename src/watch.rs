@@ -14,9 +14,10 @@ use crate::config::read_config;
 use crate::config::store_settings;
 use crate::config::Settings;
 use crate::consts::DEBOUNCE_MS;
+use crate::consts::EffectDef;
 use crate::consts::INOTIFY_BUF;
-use crate::consts::WATCH_SLEEP_MS;
 use crate::consts::REGISTRY;
+use crate::consts::WATCH_SLEEP_MS;
 use crate::effect::any_effect_enabled;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
@@ -49,8 +50,8 @@ fn fd_is_valid(fd: i32) -> bool {
     fd >= 0
 }
 
-fn reload_is_broken(spv: &[u32], s: &Settings) -> bool {
-    spv.is_empty() && any_effect_enabled(s)
+fn reload_is_broken(spv: &[u32], s: &Settings, reg: &[EffectDef]) -> bool {
+    spv.is_empty() && any_effect_enabled(s, reg)
 }
 
 fn poll_dirty() -> bool {
@@ -86,8 +87,8 @@ fn init_inotify() {
     });
 }
 
-fn apply_reload(s: Settings, gl: String, spv: Vec<u32>) {
-    match reload_is_broken(&spv, &s) {
+fn apply_reload(s: Settings, gl: String, spv: Vec<u32>, reg: &[EffectDef]) {
+    match reload_is_broken(&spv, &s, reg) {
         true => log_at(LogLevel::Error, "hot reload: compilation failed, keeping previous working state"),
         false => {
             store_shaders(gl, spv);
@@ -109,7 +110,7 @@ pub(crate) fn maybe_reload() {
         true => {
             let s = read_config(&config_path(&profile_name()));
             let (gl, spv) = build_shaders(&s, &REGISTRY);
-            apply_reload(s, gl, spv);
+            apply_reload(s, gl, spv, &REGISTRY);
         }
         false => (),
     }

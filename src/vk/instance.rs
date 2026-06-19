@@ -47,6 +47,33 @@ pub(crate) fn owning_instance(phys: vk::PhysicalDevice) -> Option<(u64, VkInstSt
     })
 }
 
+fn register_instance(gipa: vk::PFN_vkGetInstanceProcAddr, handle: vk::Instance) {
+    let static_fn = vk::StaticFn { get_instance_proc_addr: gipa };
+    let instance = unsafe { ash::Instance::load(&static_fn, handle) };
+    insts_put(handle.as_raw(), VkInstState { instance, gipa });
+    log_at(LogLevel::Info, "vk instance registered");
+}
+
+fn invoke_create_instance(
+    create_fn: unsafe extern "system" fn(),
+    gipa: vk::PFN_vkGetInstanceProcAddr,
+    ci: *const vk::InstanceCreateInfo,
+    alloc: *const vk::AllocationCallbacks,
+    out: *mut vk::Instance,
+) -> vk::Result {
+    let r = unsafe {
+        let cf: vk::PFN_vkCreateInstance = mem::transmute(create_fn);
+        cf(ci, alloc, out)
+    };
+    match r {
+        vk::Result::SUCCESS => {
+            register_instance(gipa, unsafe { *out });
+            vk::Result::SUCCESS
+        }
+        e => e,
+    }
+}
+
 pub(crate) fn call_real_create_instance(
     link: Option<VkLayerLinkInfo>,
     ci: *const vk::InstanceCreateInfo,
@@ -55,25 +82,8 @@ pub(crate) fn call_real_create_instance(
 ) -> vk::Result {
     match link {
         None => vk::Result::ERROR_INITIALIZATION_FAILED,
-        Some(l) => {
-            let create = call_next_gipa(l.pfn_next_get_instance_proc_addr, vk::Instance::null(), "vkCreateInstance");
-            match create {
-                None => vk::Result::ERROR_INITIALIZATION_FAILED,
-                Some(f) => unsafe {
-                    let cf: vk::PFN_vkCreateInstance = mem::transmute(f);
-                    let r = cf(ci, alloc, out);
-                    match r {
-                        vk::Result::SUCCESS => {
-                            let static_fn = vk::StaticFn { get_instance_proc_addr: l.pfn_next_get_instance_proc_addr };
-                            let instance = ash::Instance::load(&static_fn, *out);
-                            insts_put((*out).as_raw(), VkInstState { instance, gipa: l.pfn_next_get_instance_proc_addr });
-                            log_at(LogLevel::Info, "vk instance registered");
-                            r
-                        }
-                        e => e,
-                    }
-                },
-            }
-        }
+        Some(l) => call_next_gipa(l.pfn_next_get_instance_proc_addr, vk::Instance::null(), "vkCreateInstance")
+            .map(|f| invoke_create_instance(f, l.pfn_next_get_instance_proc_addr, ci, alloc, out))
+            .unwrap_or(vk::Result::ERROR_INITIALIZATION_FAILED),
     }
 }

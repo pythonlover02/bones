@@ -53,13 +53,49 @@ fn call_copy_image(
     }
 }
 
-fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
-    let cb = st.cmd_bufs[idx];
-    let img = st.images[idx];
-    let need_hist_init = !st.history_init;
+struct PostfxFrame {
+    fence: vk::Fence,
+    semaphore: vk::Semaphore,
+    cmd_buf: vk::CommandBuffer,
+    swap_image: vk::Image,
+    extent: vk::Extent2D,
+    render_pass: vk::RenderPass,
+    framebuffer: vk::Framebuffer,
+    pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
+    desc_set: vk::DescriptorSet,
+    tex_input: vk::Image,
+    tex_output: vk::Image,
+    tex_history: vk::Image,
+    need_history_init: bool,
+}
+
+fn extract_postfx_frame(st: &mut VkSwapState, idx: usize) -> PostfxFrame {
+    let need_history_init = !st.history_init;
     st.history_init = true;
+    PostfxFrame {
+        fence: st.fences[idx],
+        semaphore: st.semaphores[idx],
+        cmd_buf: st.cmd_bufs[idx],
+        swap_image: st.images[idx],
+        extent: st.extent,
+        render_pass: st.render_pass,
+        framebuffer: st.framebuffers[0],
+        pipeline: st.pipeline,
+        pipeline_layout: st.pipeline_layout,
+        desc_set: st.desc_sets[idx],
+        tex_input: st.tex_input,
+        tex_output: st.tex_output,
+        tex_history: st.tex_history,
+        need_history_init,
+    }
+}
+
+fn record_postfx_commands(dev: &VkDevState, frame: &PostfxFrame) {
+    let cb = frame.cmd_buf;
+    let img = frame.swap_image;
     let (t, fps) = frame_time_fps();
-    let push = [st.extent.width as f32, st.extent.height as f32, t, fps];
+    let push = [frame.extent.width as f32, frame.extent.height as f32, t, fps];
     let region = vk::ImageCopy {
         src_subresource: vk::ImageSubresourceLayers {
             aspect_mask: vk::ImageAspectFlags::COLOR, layer_count: 1, ..Default::default()
@@ -67,7 +103,7 @@ fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
         dst_subresource: vk::ImageSubresourceLayers {
             aspect_mask: vk::ImageAspectFlags::COLOR, layer_count: 1, ..Default::default()
         },
-        extent: vk::Extent3D { width: st.extent.width, height: st.extent.height, depth: 1 },
+        extent: vk::Extent3D { width: frame.extent.width, height: frame.extent.height, depth: 1 },
         ..Default::default()
     };
     let bi = vk::CommandBufferBeginInfo {
@@ -75,8 +111,8 @@ fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
     };
     unsafe { let _ = dev.device.begin_command_buffer(cb, &bi); }
 
-    match need_hist_init {
-        true => record_history_clear(dev, cb, st.tex_history),
+    match frame.need_history_init {
+        true => record_history_clear(dev, cb, frame.tex_history),
         false => (),
     }
 
@@ -84,14 +120,14 @@ fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
         vk::ImageLayout::PRESENT_SRC_KHR, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
         vk::AccessFlags::MEMORY_READ, vk::AccessFlags::TRANSFER_READ,
         vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
-    barrier(dev, cb, st.tex_input,
+    barrier(dev, cb, frame.tex_input,
         vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE,
         vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
 
-    call_copy_image(dev, cb, img, st.tex_input, &region);
+    call_copy_image(dev, cb, img, frame.tex_input, &region);
 
-    barrier(dev, cb, st.tex_input,
+    barrier(dev, cb, frame.tex_input,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
         vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::FRAGMENT_SHADER);
@@ -99,43 +135,43 @@ fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
         vk::ImageLayout::TRANSFER_SRC_OPTIMAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::AccessFlags::TRANSFER_READ, vk::AccessFlags::TRANSFER_WRITE,
         vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::TRANSFER);
-    barrier(dev, cb, st.tex_output,
+    barrier(dev, cb, frame.tex_output,
         vk::ImageLayout::UNDEFINED, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         vk::AccessFlags::empty(), vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
         vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
 
     let rpbi = vk::RenderPassBeginInfo {
-        render_pass: st.render_pass, framebuffer: st.framebuffers[0],
-        render_area: vk::Rect2D { extent: st.extent, ..Default::default() }, ..Default::default()
+        render_pass: frame.render_pass, framebuffer: frame.framebuffer,
+        render_area: vk::Rect2D { extent: frame.extent, ..Default::default() }, ..Default::default()
     };
     unsafe {
         dev.device.cmd_begin_render_pass(cb, &rpbi, vk::SubpassContents::INLINE);
-        dev.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, st.pipeline);
-        dev.device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::GRAPHICS, st.pipeline_layout, 0, &[st.desc_sets[idx]], &[]);
-        dev.device.cmd_push_constants(cb, st.pipeline_layout, vk::ShaderStageFlags::FRAGMENT, 0,
+        dev.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, frame.pipeline);
+        dev.device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::GRAPHICS, frame.pipeline_layout, 0, &[frame.desc_set], &[]);
+        dev.device.cmd_push_constants(cb, frame.pipeline_layout, vk::ShaderStageFlags::FRAGMENT, 0,
             std::slice::from_raw_parts(push.as_ptr() as *const u8, PUSH_BYTES as usize));
         dev.device.cmd_draw(cb, 3, 1, 0, 0);
         dev.device.cmd_end_render_pass(cb);
     }
 
-    barrier(dev, cb, st.tex_output,
+    barrier(dev, cb, frame.tex_output,
         vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
         vk::AccessFlags::COLOR_ATTACHMENT_WRITE, vk::AccessFlags::TRANSFER_READ,
         vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, vk::PipelineStageFlags::TRANSFER);
     unsafe {
-        dev.device.cmd_copy_image(cb, st.tex_output, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        dev.device.cmd_copy_image(cb, frame.tex_output, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             img, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region]);
     }
 
-    barrier(dev, cb, st.tex_history,
+    barrier(dev, cb, frame.tex_history,
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::AccessFlags::SHADER_READ, vk::AccessFlags::TRANSFER_WRITE,
         vk::PipelineStageFlags::FRAGMENT_SHADER, vk::PipelineStageFlags::TRANSFER);
     unsafe {
-        dev.device.cmd_copy_image(cb, st.tex_output, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            st.tex_history, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region]);
+        dev.device.cmd_copy_image(cb, frame.tex_output, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            frame.tex_history, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region]);
     }
-    barrier(dev, cb, st.tex_history,
+    barrier(dev, cb, frame.tex_history,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
         vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::FRAGMENT_SHADER);
@@ -147,36 +183,50 @@ fn record_postfx_commands(dev: &VkDevState, st: &mut VkSwapState, idx: usize) {
     unsafe { let _ = dev.device.end_command_buffer(cb); }
 }
 
+fn call_wait_and_reset_fence(dev: &VkDevState, fence: vk::Fence) {
+    unsafe {
+        let _ = dev.device.wait_for_fences(&[fence], true, u64::MAX);
+        let _ = dev.device.reset_fences(&[fence]);
+    }
+}
+
+fn submit_postfx(
+    dev: &VkDevState,
+    queue: vk::Queue,
+    cb: vk::CommandBuffer,
+    done: vk::Semaphore,
+    fence: vk::Fence,
+    waits: Vec<vk::Semaphore>,
+) -> Vec<vk::Semaphore> {
+    let stages = vec![vk::PipelineStageFlags::ALL_COMMANDS; waits.len()];
+    let si = vk::SubmitInfo {
+        wait_semaphore_count: waits.len() as u32,
+        p_wait_semaphores: waits.as_ptr(),
+        p_wait_dst_stage_mask: stages.as_ptr(),
+        command_buffer_count: 1,
+        p_command_buffers: &cb,
+        signal_semaphore_count: 1,
+        p_signal_semaphores: &done,
+        ..Default::default()
+    };
+    match unsafe { dev.device.queue_submit(queue, &[si], fence) } {
+        Ok(()) => vec![done],
+        Err(_) => {
+            log_at(LogLevel::Error, "postfx submit failed, passing original waits through");
+            waits
+        }
+    }
+}
+
 fn record_postfx_pass(
     queue: vk::Queue, dev: &VkDevState, sc_raw: u64, idx: usize, waits: Vec<vk::Semaphore>,
 ) -> Vec<vk::Semaphore> {
-    let prep = swap_fx_lock_mut(sc_raw, |st| {
-        let fence = st.fences[idx];
-        let done = st.semaphores[idx];
-        let cb = st.cmd_bufs[idx];
-        unsafe {
-            let _ = dev.device.wait_for_fences(&[fence], true, u64::MAX);
-            let _ = dev.device.reset_fences(&[fence]);
-        }
-        record_postfx_commands(dev, st, idx);
-        (cb, done, fence)
-    });
-    match prep {
+    match swap_fx_lock_mut(sc_raw, |st| extract_postfx_frame(st, idx)) {
         None => waits,
-        Some((cb, done, fence)) => {
-            let stages = vec![vk::PipelineStageFlags::ALL_COMMANDS; waits.len()];
-            let si = vk::SubmitInfo {
-                wait_semaphore_count: waits.len() as u32, p_wait_semaphores: waits.as_ptr(),
-                p_wait_dst_stage_mask: stages.as_ptr(), command_buffer_count: 1, p_command_buffers: &cb,
-                signal_semaphore_count: 1, p_signal_semaphores: &done, ..Default::default()
-            };
-            match unsafe { dev.device.queue_submit(queue, &[si], fence) } {
-                Ok(()) => vec![done],
-                Err(_) => {
-                    log_at(LogLevel::Error, "postfx submit failed, passing original waits through");
-                    waits
-                }
-            }
+        Some(frame) => {
+            call_wait_and_reset_fence(dev, frame.fence);
+            record_postfx_commands(dev, &frame);
+            submit_postfx(dev, queue, frame.cmd_buf, frame.semaphore, frame.fence, waits)
         }
     }
 }

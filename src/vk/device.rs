@@ -51,28 +51,34 @@ pub(crate) fn queue_dev_put(q: u64, d: u64) {
     }
 }
 
-pub(crate) fn queue_owner(queue: vk::Queue) -> Option<VkDevState> {
-    let cached = queue_dev_get(queue.as_raw()).and_then(devs_get);
-    match cached {
-        Some(d) => Some(d),
-        None => {
-            let candidates: Vec<(u64, VkDevState)> = DEVS
-                .read()
-                .ok()
-                .and_then(|g| g.as_ref().map(|m| m.iter().map(|(k, v)| (*k, v.clone())).collect()))
-                .unwrap_or_default();
-            let found = candidates
-                .into_iter()
-                .find(|(_, d)| unsafe { d.device.get_device_queue(d.qfam, 0) } == queue);
-            match found {
-                Some((k, v)) => {
-                    queue_dev_put(queue.as_raw(), k);
-                    Some(v)
-                }
-                None => DEVS.read().ok().and_then(|g| g.as_ref().and_then(|m| m.values().next().cloned())),
-            }
+fn fallback_dev() -> Option<VkDevState> {
+    DEVS.read().ok().and_then(|g| g.as_ref().and_then(|m| m.values().next().cloned()))
+}
+
+fn find_queue_in_devs(queue: vk::Queue) -> Option<(u64, VkDevState)> {
+    DEVS.read()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|m|
+            m.iter()
+                .find(|(_, d)| unsafe { d.device.get_device_queue(d.qfam, 0) } == queue)
+                .map(|(k, v)| (*k, v.clone()))
+        ))
+}
+
+fn cache_and_return(queue_raw: u64, found: Option<(u64, VkDevState)>) -> Option<VkDevState> {
+    match found {
+        Some((k, v)) => {
+            queue_dev_put(queue_raw, k);
+            Some(v)
         }
+        None => fallback_dev(),
     }
+}
+
+pub(crate) fn queue_owner(queue: vk::Queue) -> Option<VkDevState> {
+    queue_dev_get(queue.as_raw())
+        .and_then(devs_get)
+        .or_else(|| cache_and_return(queue.as_raw(), find_queue_in_devs(queue)))
 }
 
 fn first_queue_family(ci: *const vk::DeviceCreateInfo) -> u32 {
@@ -84,6 +90,45 @@ fn first_queue_family(ci: *const vk::DeviceCreateInfo) -> u32 {
     }
 }
 
+fn register_device(
+    gdpa: vk::PFN_vkGetDeviceProcAddr,
+    handle: vk::Device,
+    inst: &VkInstState,
+    phys: vk::PhysicalDevice,
+    ci: *const vk::DeviceCreateInfo,
+) {
+    let mut inst_fp = inst.instance.fp_v1_0().clone();
+    inst_fp.get_device_proc_addr = gdpa;
+    let device = unsafe { ash::Device::load(&inst_fp, handle) };
+    let swap_fp = vk::KhrSwapchainFn::load(|name| unsafe { mem::transmute(gdpa(handle, name.as_ptr())) });
+    let mem_props = unsafe { inst.instance.get_physical_device_memory_properties(phys) };
+    let qfam = first_queue_family(ci);
+    devs_put(handle.as_raw(), VkDevState { device, mem_props, gdpa, swap_fp, qfam });
+    log_at(LogLevel::Info, "vk device registered");
+}
+
+fn invoke_create_device(
+    create_fn: unsafe extern "system" fn(),
+    link: &VkLayerLinkInfo,
+    inst: &VkInstState,
+    phys: vk::PhysicalDevice,
+    ci: *const vk::DeviceCreateInfo,
+    alloc: *const vk::AllocationCallbacks,
+    out: *mut vk::Device,
+) -> vk::Result {
+    let r = unsafe {
+        let cf: vk::PFN_vkCreateDevice = mem::transmute(create_fn);
+        cf(phys, ci, alloc, out)
+    };
+    match r {
+        vk::Result::SUCCESS => {
+            register_device(link.pfn_next_get_device_proc_addr, unsafe { *out }, inst, phys, ci);
+            vk::Result::SUCCESS
+        }
+        e => e,
+    }
+}
+
 pub(crate) fn call_real_create_device(
     link: Option<VkLayerLinkInfo>,
     phys: vk::PhysicalDevice,
@@ -92,32 +137,9 @@ pub(crate) fn call_real_create_device(
     out: *mut vk::Device,
 ) -> vk::Result {
     match (link, owning_instance(phys)) {
-        (Some(l), Some((ih, inst))) => {
-            let create = call_next_gipa(l.pfn_next_get_instance_proc_addr, vk::Instance::from_raw(ih), "vkCreateDevice");
-            match create {
-                None => vk::Result::ERROR_INITIALIZATION_FAILED,
-                Some(f) => unsafe {
-                    let cf: vk::PFN_vkCreateDevice = mem::transmute(f);
-                    let r = cf(phys, ci, alloc, out);
-                    match r {
-                        vk::Result::SUCCESS => {
-                            let gdpa = l.pfn_next_get_device_proc_addr;
-                            let handle = *out;
-                            let mut inst_fp = inst.instance.fp_v1_0().clone();
-                            inst_fp.get_device_proc_addr = gdpa;
-                            let device = ash::Device::load(&inst_fp, handle);
-                            let swap_fp = vk::KhrSwapchainFn::load(|name| mem::transmute(gdpa(handle, name.as_ptr())));
-                            let mem_props = inst.instance.get_physical_device_memory_properties(phys);
-                            let qfam = first_queue_family(ci);
-                            devs_put(handle.as_raw(), VkDevState { device, mem_props, gdpa, swap_fp, qfam });
-                            log_at(LogLevel::Info, "vk device registered");
-                            r
-                        }
-                        e => e,
-                    }
-                },
-            }
-        }
+        (Some(l), Some((ih, inst))) => call_next_gipa(l.pfn_next_get_instance_proc_addr, vk::Instance::from_raw(ih), "vkCreateDevice")
+            .map(|f| invoke_create_device(f, &l, &inst, phys, ci, alloc, out))
+            .unwrap_or(vk::Result::ERROR_INITIALIZATION_FAILED),
         (_, _) => vk::Result::ERROR_INITIALIZATION_FAILED,
     }
 }

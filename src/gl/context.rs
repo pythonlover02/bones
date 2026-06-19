@@ -278,8 +278,8 @@ fn needs_vbo(vbo: u32) -> bool {
     vbo == 0
 }
 
-fn rebuild_ctx_program(st: &mut CtxState, gen: i32) {
-    match build_gl_program(&current_gl_shader()) {
+fn apply_program_result(st: &mut CtxState, result: Option<(u32, UniformLocations)>, gen: i32) {
+    match result {
         Some((prog, locs)) => {
             call_delete_program_if_exists(st.program);
             st.program = prog;
@@ -291,10 +291,18 @@ fn rebuild_ctx_program(st: &mut CtxState, gen: i32) {
             st.gen = gen;
         }
     }
+}
+
+fn ensure_vbo(st: &mut CtxState) {
     match needs_vbo(st.vbo) {
         true => { let (vbo, vao) = call_create_vbo(); st.vbo = vbo; st.vao = vao; }
         false => (),
     }
+}
+
+fn rebuild_ctx_program(st: &mut CtxState, gen: i32) {
+    apply_program_result(st, build_gl_program(&current_gl_shader()), gen);
+    ensure_vbo(st);
 }
 
 pub(crate) fn ensure_ctx_targets(st: &mut CtxState, w: i32, h: i32) -> bool {

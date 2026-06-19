@@ -1,4 +1,3 @@
-use crate::consts::REGISTRY;
 use crate::consts::EffectDef;
 use crate::config::Settings;
 
@@ -9,8 +8,8 @@ pub(crate) fn enabled(s: &Settings, name: &str) -> bool {
     }
 }
 
-pub(crate) fn any_effect_enabled(s: &Settings) -> bool {
-    REGISTRY.iter().any(|e| enabled(s, e.name))
+pub(crate) fn any_effect_enabled(s: &Settings, reg: &[EffectDef]) -> bool {
+    reg.iter().any(|e| enabled(s, e.name))
 }
 
 pub(crate) fn emit_defines(s: &Settings, reg: &[EffectDef]) -> String {

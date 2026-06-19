@@ -3,6 +3,8 @@ use std::ptr;
 
 use crate::config::ensure_settings;
 use crate::config::Settings;
+use crate::consts::EffectDef;
+use crate::consts::REGISTRY;
 use crate::effect::any_effect_enabled;
 use crate::interpose::call_egl_current_ctx;
 use crate::interpose::call_egl_surface_size;
@@ -30,8 +32,8 @@ fn ctx_key() -> u64 {
     }
 }
 
-fn want_postfx(ctx: u64, s: &Settings) -> bool {
-    ctx != 0 && any_effect_enabled(s)
+fn want_postfx(ctx: u64, s: &Settings, reg: &[EffectDef]) -> bool {
+    ctx != 0 && any_effect_enabled(s, reg)
 }
 
 fn run_postfx_at(key: u64, w: i32, h: i32) {
@@ -62,7 +64,7 @@ fn run_postfx_egl(dpy: *mut c_void, surf: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn glXSwapBuffers(dpy: *mut c_void, drawable: libc::c_ulong) {
     maybe_reload();
-    match want_postfx(ctx_key(), &ensure_settings()) {
+    match want_postfx(ctx_key(), &ensure_settings(), &REGISTRY) {
         true => run_postfx_glx(dpy, drawable),
         false => call_real_glx_swap(dpy, drawable),
     }
@@ -71,7 +73,7 @@ pub unsafe extern "C" fn glXSwapBuffers(dpy: *mut c_void, drawable: libc::c_ulon
 #[no_mangle]
 pub unsafe extern "C" fn eglSwapBuffers(dpy: *mut c_void, surface: *mut c_void) -> u32 {
     maybe_reload();
-    match want_postfx(call_egl_current_ctx() as u64, &ensure_settings()) {
+    match want_postfx(call_egl_current_ctx() as u64, &ensure_settings(), &REGISTRY) {
         true => { run_postfx_egl(dpy, surface); call_real_egl_swap(dpy, surface) }
         false => call_real_egl_swap(dpy, surface),
     }
@@ -82,7 +84,7 @@ pub unsafe extern "C" fn eglSwapBuffersWithDamageEXT(
     dpy: *mut c_void, surf: *mut c_void, rects: *const i32, n: i32,
 ) -> u32 {
     maybe_reload();
-    match want_postfx(call_egl_current_ctx() as u64, &ensure_settings()) {
+    match want_postfx(call_egl_current_ctx() as u64, &ensure_settings(), &REGISTRY) {
         true => { run_postfx_egl(dpy, surf); call_real_egl_swap_damage_ext(dpy, surf, ptr::null(), 0) }
         false => call_real_egl_swap_damage_ext(dpy, surf, rects, n),
     }
@@ -93,7 +95,7 @@ pub unsafe extern "C" fn eglSwapBuffersWithDamageKHR(
     dpy: *mut c_void, surf: *mut c_void, rects: *const i32, n: i32,
 ) -> u32 {
     maybe_reload();
-    match want_postfx(call_egl_current_ctx() as u64, &ensure_settings()) {
+    match want_postfx(call_egl_current_ctx() as u64, &ensure_settings(), &REGISTRY) {
         true => { run_postfx_egl(dpy, surf); call_real_egl_swap_damage_khr(dpy, surf, ptr::null(), 0) }
         false => call_real_egl_swap_damage_khr(dpy, surf, rects, n),
     }

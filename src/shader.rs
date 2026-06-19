@@ -116,15 +116,23 @@ pub(crate) fn build_shaders(s: &Settings, reg: &[EffectDef]) -> (String, Vec<u32
     (gl, spv)
 }
 
-pub(crate) fn store_shaders(gl: String, spv: Vec<u32>) {
+fn store_gl_shader(gl: String) {
     match SHADER_GL.write() {
         Ok(mut g) => *g = Some(gl),
         Err(_) => (),
     }
+}
+
+fn store_spv_shader(spv: Vec<u32>) {
     match SHADER_SPV.write() {
         Ok(mut g) => *g = Some(spv),
         Err(_) => (),
     }
+}
+
+pub(crate) fn store_shaders(gl: String, spv: Vec<u32>) {
+    store_gl_shader(gl);
+    store_spv_shader(spv);
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 

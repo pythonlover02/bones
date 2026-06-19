@@ -11,6 +11,7 @@ use crate::consts::LAYER_IFACE_VERSION;
 use crate::consts::LAYER_LINK_INFO;
 use crate::consts::LAYER_NAME;
 use crate::consts::NULL_OK;
+use crate::consts::REGISTRY;
 use crate::effect::any_effect_enabled;
 use crate::logging::init_log_level;
 use crate::logging::log_at;
@@ -190,14 +191,18 @@ unsafe extern "system" fn vkGetInstanceProcAddr(inst: vk::Instance, name: *const
     }
 }
 
+fn forward_device_proc(dev: vk::Device, name: &str) -> vk::PFN_vkVoidFunction {
+    match devs_gdpa(dev.as_raw()) {
+        Some(gdpa) => call_next_gdpa(gdpa, dev, name),
+        None => None,
+    }
+}
+
 unsafe extern "system" fn vkGetDeviceProcAddr(dev: vk::Device, name: *const c_char) -> vk::PFN_vkVoidFunction {
     let n = cstr_to_str(name);
     match vk_hooked_symbol(n) {
         Some(p) => mem::transmute(p),
-        None => match devs_gdpa(dev.as_raw()) {
-            Some(gdpa) => call_next_gdpa(gdpa, dev, n),
-            None => None,
-        },
+        None => forward_device_proc(dev, n),
     }
 }
 
@@ -221,17 +226,21 @@ unsafe extern "system" fn vkCreateInstance(
     call_real_create_instance(link, ci, alloc, out)
 }
 
+fn call_chain_destroy_instance(s: &VkInstState, inst: vk::Instance, alloc: *const vk::AllocationCallbacks) {
+    match call_next_gipa(s.gipa, inst, "vkDestroyInstance") {
+        Some(d) => unsafe {
+            let df: vk::PFN_vkDestroyInstance = mem::transmute(d);
+            df(inst, alloc);
+        },
+        None => (),
+    }
+}
+
 unsafe extern "system" fn vkDestroyInstance(inst: vk::Instance, alloc: *const vk::AllocationCallbacks) {
     let st = insts_get(inst.as_raw());
     insts_del(inst.as_raw());
     match st {
-        Some(s) => match call_next_gipa(s.gipa, inst, "vkDestroyInstance") {
-            Some(d) => {
-                let df: vk::PFN_vkDestroyInstance = mem::transmute(d);
-                df(inst, alloc);
-            }
-            None => (),
-        },
+        Some(s) => call_chain_destroy_instance(&s, inst, alloc),
         None => (),
     }
 }
@@ -267,7 +276,7 @@ unsafe extern "system" fn vkCreateSwapchainKHR(
     let s = ensure_settings();
     match devs_get(dev.as_raw()) {
         None => vk::Result::ERROR_INITIALIZATION_FAILED,
-        Some(d) => create_swapchain_with_fx(&d, dev, ci, alloc, out, any_effect_enabled(&s)),
+        Some(d) => create_swapchain_with_fx(&d, dev, ci, alloc, out, any_effect_enabled(&s, &REGISTRY)),
     }
 }
 

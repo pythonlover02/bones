@@ -7,6 +7,7 @@ use std::sync::RwLock;
 use crate::consts::CONFIG_SEP;
 use crate::consts::ENV_CONFIG;
 use crate::consts::ENV_CONFIG_NAME;
+use crate::consts::EffectDef;
 use crate::consts::HEAD;
 use crate::consts::REGISTRY;
 use crate::logging::{LogLevel, log_at, init_log_level};
@@ -28,25 +29,26 @@ fn toml_bool(v: &toml::Value) -> bool {
     }
 }
 
+fn section_effects(v: &toml::Value) -> Vec<(String, bool)> {
+    match v.as_table() {
+        Some(sec) => sec.iter().map(|(k, v2)| (k.clone(), toml_bool(v2))).collect(),
+        None => Vec::new(),
+    }
+}
+
 fn effects_of(doc: &toml::Value) -> HashMap<String, bool> {
     match doc.as_table() {
-        Some(t) => t
-            .iter()
-            .flat_map(|(_, v)| match v.as_table() {
-                Some(sec) => sec.iter().map(|(k, v2)| (k.clone(), toml_bool(v2))).collect::<Vec<_>>(),
-                None => Vec::new(),
-            })
-            .collect(),
+        Some(t) => t.iter().flat_map(|(_, v)| section_effects(v)).collect(),
         None => HashMap::new(),
     }
 }
 
-fn name_is_known(raw: &str) -> bool {
-    REGISTRY.iter().any(|e| e.name == raw)
+fn name_is_known(raw: &str, reg: &[EffectDef]) -> bool {
+    reg.iter().any(|e| e.name == raw)
 }
 
-fn warn_unknown(raw: &str) -> Option<(String, bool)> {
-    match name_is_known(raw) {
+fn warn_unknown(raw: &str, reg: &[EffectDef]) -> Option<(String, bool)> {
+    match name_is_known(raw, reg) {
         true => Some((raw.to_string(), true)),
         false => {
             log_at(LogLevel::Warn, "unknown effect in BONES_CONFIG, ignoring");
@@ -55,11 +57,11 @@ fn warn_unknown(raw: &str) -> Option<(String, bool)> {
     }
 }
 
-fn effects_from_list(text: &str) -> HashMap<String, bool> {
+fn effects_from_list(text: &str, reg: &[EffectDef]) -> HashMap<String, bool> {
     text.split(CONFIG_SEP)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .filter_map(warn_unknown)
+        .filter_map(|s| warn_unknown(s, reg))
         .collect()
 }
 
@@ -70,8 +72,8 @@ pub(crate) fn parse_settings(text: &str) -> Settings {
     Settings { hot_reload: hot, effects }
 }
 
-pub(crate) fn settings_from_env(text: &str) -> Settings {
-    Settings { hot_reload: false, effects: effects_from_list(text) }
+pub(crate) fn settings_from_env(text: &str, reg: &[EffectDef]) -> Settings {
+    Settings { hot_reload: false, effects: effects_from_list(text, reg) }
 }
 
 pub(crate) fn default_settings() -> Settings {
@@ -119,9 +121,9 @@ pub(crate) fn read_config(path: &PathBuf) -> Settings {
         .unwrap_or_else(|_| default_settings())
 }
 
-pub(crate) fn resolve_settings() -> Settings {
+pub(crate) fn resolve_settings(reg: &[EffectDef]) -> Settings {
     match env::var(ENV_CONFIG) {
-        Ok(text) => settings_from_env(&text),
+        Ok(text) => settings_from_env(&text, reg),
         Err(_) => read_config(&config_path(&profile_name())),
     }
 }
@@ -136,7 +138,7 @@ pub(crate) fn ensure_settings() -> Settings {
 
 pub(crate) fn load_settings() -> Settings {
     init_log_level();
-    let s = resolve_settings();
+    let s = resolve_settings(&REGISTRY);
     let (gl, spv) = build_shaders(&s, &REGISTRY);
     store_shaders(gl, spv);
     store_settings(s.clone());

@@ -253,6 +253,16 @@ fn call_create_swapchain_fallback(
     }
 }
 
+fn try_register_postfx(d: &VkDevState, dev: vk::Device, sc: vk::SwapchainKHR, ci: &vk::SwapchainCreateInfoKHR) {
+    match build_swap_state(d, dev, sc, ci) {
+        Ok(st) => {
+            swap_put(sc.as_raw(), st);
+            log_at(LogLevel::Info, "swapchain registered for postfx");
+        }
+        Err(()) => log_at(LogLevel::Warn, "swapchain postfx setup failed, presenting untouched"),
+    }
+}
+
 pub(crate) fn create_swapchain_with_fx(
     d: &VkDevState,
     dev: vk::Device,
@@ -273,13 +283,7 @@ pub(crate) fn create_swapchain_with_fx(
     let r1 = unsafe { (d.swap_fp.create_swapchain_khr)(dev, &upgraded, alloc, out) };
     match (r1, fx_wanted) {
         (vk::Result::SUCCESS, true) => {
-            match build_swap_state(d, dev, unsafe { *out }, &upgraded) {
-                Ok(st) => {
-                    swap_put(unsafe { *out }.as_raw(), st);
-                    log_at(LogLevel::Info, "swapchain registered for postfx");
-                }
-                Err(()) => log_at(LogLevel::Warn, "swapchain postfx setup failed, presenting untouched"),
-            }
+            try_register_postfx(d, dev, unsafe { *out }, &upgraded);
             vk::Result::SUCCESS
         }
         (vk::Result::SUCCESS, false) => vk::Result::SUCCESS,

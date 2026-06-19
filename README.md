@@ -1,264 +1,609 @@
 > [!NOTE]
 > Bug reports and pull requests are welcome, but please understand that development happens in my free time and progress may be slow at times. The project is still maintained even if the last commit was made a while ago.
 
-# Bones – GLSL ubershader post‑processing tool (OpenGL/Vulkan)
+# Bones:
 
-Bones is a realtime post‑processing overlay for Linux games, written in Rust. It intercepts OpenGL and Vulkan swap buffers, applies a single‑pass ubershader with a wide range of effects, and then presents the modified frame. The tool is designed for **performance** and **simplicity**: no custom LUTs, no external shader loading, no custom values, and no ping‑pong. All effects are combined into one shader pass, making memory usage O(1) regardless of how many effects are enabled.
+**A GLSL ubershader post‑processing tool for Linux games (OpenGL · OpenGL ES · Vulkan).**
 
-## Table of Contents
+Bones is a realtime post‑processing tool written in Rust. It intercepts OpenGL and Vulkan buffer swaps, runs a single‑pass ubershader containing 118 effects, and presents the modified frame. It is built for **performance** and **simplicity**: no external shader loading, no custom LUTs, no user‑tunable parameters, no ping‑pong. Every enabled effect is compiled into one shader pass, so VRAM usage and draw‑call count stay constant no matter how many effects you turn on.
+
+### At a glance:
+
+- **118 effects** across 20 categories, geometry, AA, sharpening, 24 temporal modes, bloom, CRT/OLED/VHS, colour grading, colourblind correction, and more.
+- **One shader, one draw call**, effects are `#ifdef`‑toggled in a single ubershader. VRAM is O(1) (three textures total).
+- **OpenGL + Vulkan** in one tool, native GLX/EGL hooking *and* an explicit Vulkan layer, simultaneously.
+- **Hot reload**, edit the config while the game runs; the shader recompiles live.
+- **Reproducible launches**, define an entire effect stack in a single environment variable.
+- **Flatpak support**, first‑class, via a runtime extension.
+
+## Quick Start:
+
+```sh
+# 1. Build and install
+git clone https://github.com/pythonlover02/bones.git
+cd bones
+make
+sudo make install
+
+# 2. Run a game with an effect stack (inline, no config file needed)
+BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/games/mygame
+```
+
+Prefer a config file? On first run Bones writes a fully documented `~/.config/bones/bones-config.toml`. Set any effect to `true`, then:
+
+```sh
+bones -- ~/games/mygame
+```
+
+**Steam (native game)**, set the game Launch Options to:
+
+```
+bones -- %command%
+```
+
+**Steam (Flatpak game)**, see [Flatpak](#flatpak).
+
+## Table of Contents:
 
 - [Minimum Requirements](#minimum-requirements)
 - [How It Works](#how-it-works)
-- [Features](#features)
 - [Installation](#installation)
 - [Flatpak](#flatpak)
 - [Usage](#usage)
-- [Effect Categories](#effect-categories)
+- [Environment Variables](#environment-variables)
+- [Effect Catalogue](#effect-catalogue)
+- [Recommended Combinations](#recommended-combinations)
 - [Performance & Limitations](#performance--limitations)
 - [Credits & License](#credits--license)
 
-## Minimum Requirements
+## Minimum Requirements:
 
-### OpenGL path
-- **OpenGL 3.0** or newer (released 2008; supported by essentially all discrete and integrated GPUs made in the last 15 years)
-- Mesa 7.9+ or any proprietary driver with GL 3.0 support
-- GLX or EGL windowing
+| Path | Requirement |
+|------|-------------|
+| **OpenGL** | OpenGL 3.0+ (2008‑era and newer GPUs); Mesa 7.9+ or any proprietary driver; GLX or EGL |
+| **Vulkan** | Vulkan 1.0+ with `VK_KHR_swapchain` |
+| **OpenGL ES** | OpenGL ES 2.0+ (via EGL) |
+| **System** | Linux x86_64; `glibc 2.17`+ for native builds, `glibc 2.36` for portable release builds |
 
-Contexts that report GL 3.0 or higher automatically satisfy all requirements (core FBO, VAO, GLSL 1.30). Pure GL 2.1 contexts without `GL_ARB_vertex_array_object` will have post‑FX silently disabled for that context; the game runs normally, just without the overlay.
+Contexts reporting GL 3.0 or higher automatically satisfy all requirements (core FBO, VAO, GLSL 1.30). Pure GL 2.1 contexts without `GL_ARB_vertex_array_object` have post‑FX silently disabled for that context, the game runs normally, just without effects.
 
-### Vulkan path
-- **Vulkan 1.0** or newer
-- A driver that supports `VK_KHR_swapchain`
+## How It Works:
 
-### OpenGL ES path (EGL)
-- **OpenGL ES 2.0** or newer
+Bones has two interception paths that run simultaneously:
 
-### General
-- Linux x86_64
-- `glibc 2.17` or newer for native builds; `glibc 2.36` for portable release builds (built inside a Debian Bookworm container)
+- **OpenGL**, uses `LD_PRELOAD` to hook `glXSwapBuffers` (GLX) and `eglSwapBuffers` (EGL). Before the real swap, Bones copies the default framebuffer into a texture, draws a full‑screen triangle with the ubershader, and writes the result back.
+- **Vulkan**, registers as an explicit layer (`VK_LAYER_BONES_overlay`), enabled via `VK_INSTANCE_LAYERS`. At `vkQueuePresentKHR`, the layer copies the swapchain image into an offscreen texture, renders the ubershader into a second offscreen image, and copies the result back before presentation.
 
-## How It Works
+The launcher activates both paths by setting `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` for the target process. The library and its manifest live in one directory, and the manifest references the library by a relative path, so the loader resolves it without `ldconfig`.
 
-Bones has two interception paths that work simultaneously:
-
-- **OpenGL** – uses `LD_PRELOAD` to hook `glXSwapBuffers` (GLX) and `eglSwapBuffers` (EGL). Before the real swap, Bones copies the default framebuffer into a texture, draws a full‑screen triangle with the ubershader, and writes the result back.
-- **Vulkan** – registers as an explicit Vulkan layer (`VK_LAYER_BONES_overlay`), enabled via `VK_INSTANCE_LAYERS`. At `vkQueuePresentKHR`, the layer copies the swapchain image into an offscreen texture, renders the ubershader into a second offscreen image, and copies the result back to the swapchain image before presentation.
-
-The launcher activates both paths by setting, for the target process: `LD_PRELOAD` (the library path), `VK_ADD_LAYER_PATH` (the directory holding the layer manifest), and `VK_INSTANCE_LAYERS` (to enable the layer). The library and its manifest live together in one directory, and the manifest references the library by a relative path, so the loader resolves it without relying on `ldconfig`.
-
-In both paths the pipeline is the same:
+In both paths the pipeline is identical:
 
 1. Copy the current frame into an input texture.
-2. Run a single **ubershader** that combines all enabled effects.
+2. Run a single **ubershader** combining all enabled effects.
 3. Optionally read a history texture for temporal effects.
 4. Write the result back and copy it into the history texture for the next frame.
 
-Unlike traditional reshade pipelines that chain multiple shader passes (ping‑pong between FBOs), Bones **never uses more than one draw call**. All effects are compiled into one large shader with `#ifdef` guards. This keeps VRAM usage constant and avoids the overhead of multiple passes.
+Unlike traditional reshade pipelines that chain multiple passes (ping‑pong between FBOs), Bones **never uses more than one draw call**. All effects are compiled into one large shader guarded by `#ifdef`. This keeps VRAM constant and avoids multi‑pass overhead.
 
-Because effects are executed in a fixed order (UV warp → spatial → temporal → inline → colour grading), some combinations may produce unexpected results if you enable two effects from the same category. **For best results, enable only one effect per category, unless they are intended to be used together.**
+Effects run in a **fixed order** (UV warp → spatial → temporal → inline → colour grading). Enabling two effects from the same category can produce unexpected results, so for best results enable only one per category unless they are designed to combine.
 
-## Features
+## Installation:
 
-- **118 built‑in effects** – from geometric warps to anti‑aliasing (FXAA, SMAA‑style), sharpening (CAS, RCAS), temporal smoothing (TAA, optical flow, variance accumulation), bloom, film grain, CRT/OLED/VHS simulation, colour grading, and colour blindness simulation/correction.
-- **Ubershader architecture** – all effects are compiled into a single shader. Enabling an effect simply toggles a `#define`.
-- **Hot reload** – edit your configuration TOML file while the game is running and the shader recompiles automatically (if `hot_reload = true`).
-- **Inline configuration** – pass enabled effects through the `BONES_CONFIG` environment variable for file‑free, reproducible launches.
-- **Temporal effects** – many temporal smoothing modes, including motion‑compensated accumulation inspired by DLSS/FSR/XeSS research.
-- **Performance‑first** – no custom LUT loading, no external shader scripts, no ping‑pong rendering. Everything is O(1) in VRAM and draw calls.
-- **Cross‑API** – works with OpenGL (GLX/EGL) and Vulkan applications.
+### Pre‑built binaries (if available):
 
-## Installation
+Download the latest release from the [Releases](../../releases) page, extract it, and from inside the extracted directory run:
 
-### Pre‑built binaries (if available)
+```sh
+sudo make install
+```
 
-Download the latest release from the [Releases](../../releases) page. Extract it, open a terminal inside the extracted directory, and run:
+This installs the `bones` launcher, `libbones.so`, the Vulkan layer manifest, and any bundled Flatpak extensions.
 
-    sudo make install
+### Building from source:
 
-This installs the `bones` launcher, `libbones.so`, the Vulkan layer manifest, and any Flatpak extensions included in the release bundle.
-
-### Building from source
-
-    git clone https://github.com/pythonlover02/bones.git
-    cd bones
-    make
+```sh
+git clone https://github.com/pythonlover02/bones.git
+cd bones
+make
+```
 
 Produces `target/release/bones` and `target/release/libbones.so`.
 
-### Portable release build
+### Portable release build:
 
-Builds the library inside a Debian Bookworm container (for maximum glibc compatibility) and all Flatpak extensions. Requires `podman` or `docker`, `flatpak`, `ostree`, and `python3`.
+Builds the library inside a Debian Bookworm container (for maximum glibc compatibility) plus all Flatpak extensions. Requires `podman` or `docker`, `flatpak`, `ostree`, and `python3`.
 
-    make release
+```sh
+make release
+```
 
-### Installing
+### Installing:
 
 Run as root after building:
 
-    sudo make install
+```sh
+sudo make install
+```
 
-Default install locations:
-
-| File | Path |
-|------|------|
+| File | Default path |
+|------|--------------|
 | Launcher | `/usr/local/bin/bones` |
 | Library | `/usr/local/lib/bones/libbones.so` |
 | Vulkan layer manifest | `/usr/local/lib/bones/VkLayer_bones.json` |
 
-The library and manifest are installed together in `/usr/local/lib/bones/`; the launcher points the Vulkan loader at this directory at runtime, so no `ldconfig` step is required.
+Library and manifest are installed together in `/usr/local/lib/bones/`; the launcher points the Vulkan loader at this directory at runtime, so no `ldconfig` step is needed.
 
-To change the prefix:
+```sh
+sudo make install PREFIX=/opt/bones    # change prefix
+sudo make install DESTDIR=./package    # stage into a directory (packaging)
+```
 
-    sudo make install PREFIX=/opt/bones
+If Flatpak extensions were built beforehand (`make flatpak` or `make release`), they are installed per‑user for the invoking user as part of `sudo make install`.
 
-To stage into a directory (e.g. for packaging):
+### Integrated build (for Proton forks and custom launchers):
 
-    sudo make install DESTDIR=./package
+If you only need the library and manifest (no launcher), for example, to wire Bones into a Proton fork own launch script, use:
 
-If Flatpak extensions were built beforehand (via `make flatpak` or `make release`) they are installed per‑user for the invoking user as part of `sudo make install`.
+```sh
+make integrated
+```
 
-### Integrated build (for Proton forks and custom launchers)
+This builds the library and copies `VkLayer_bones.json` next to `libbones.so` in `target/release/`. Nothing is installed system‑wide. Your launcher is then responsible for setting `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to point at this build directory (or wherever you copy the two files). This decouples the manifest from the source layout, so your build output stays consistent even if the manifest is later moved into a subfolder.
 
-If you only need the library and manifest (no launcher) for example to wire Bones into a Proton forks own launch script use:
+### Uninstalling:
 
-    make integrated
+```sh
+sudo make remove
+```
 
-This builds the library (via `cargo build --release`) and copies `VkLayer_bones.json` into the same directory as `libbones.so` (`target/release/`). No files are installed to system locations. Your launcher is then responsible for setting `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to point to this build directory or to the DIR where you copy the lib and layer.
+Removes the launcher, library, and manifest; uninstalls the Flatpak extension (system scope always, user scope for the invoking user); and removes `~/.config/bones`. If run directly as root without `sudo`, it prints the remaining `--user` cleanup commands, since it cannot determine which user Flatpak and config to clean.
 
-This is done to decouple the manifest from the repo source layout. Even if the manifest file is later moved into a subfolder (e.g., `layer/`), the `integrated` target will still place it in `target/release/`, so your build output stays consistent and doesnt breaks.
+### Cleaning build artifacts:
 
-### Uninstalling
+```sh
+make clean          # cargo clean + remove built Flatpak bundles and staging
+make flatpak-clean  # remove only Flatpak bundles
+```
 
-    sudo make remove
+## Flatpak:
 
-This removes the launcher, the library, and the manifest; uninstalls the Flatpak extension (system scope always, and user scope for the invoking user); and removes the per‑user runtime/config directory (`~/.config/bones`). If run directly as root without `sudo`, it prints the remaining `--user` cleanup commands, since it cannot determine which user's Flatpak and config to clean.
+Flatpak applications run sandboxed and cannot see `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, or `VK_INSTANCE_LAYERS` set on the host, those variables do not cross the sandbox boundary. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox. The wrapper sets the activation environment **from inside** the sandbox, the only place it survives.
 
-### Cleaning build artifacts
+Extensions are built for runtime versions `23.08`, `24.08`, and `25.08`.
 
-    make clean
+### Building the extensions:
 
-Runs `cargo clean` and removes built Flatpak bundles and the `.flatpak-work/` staging directory. To clean only Flatpak bundles:
+Requires `flatpak`, `ostree`, `python3`, and a completed `make`/`make release` build.
 
-    make flatpak-clean
+```sh
+make
+make flatpak
+```
 
-## Flatpak
+This produces one bundle per supported runtime:
 
-Flatpak applications run inside a sandbox and cannot see `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, or `VK_INSTANCE_LAYERS` set on the host those environment variables do not cross the sandbox boundary. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox. The wrapper sets the activation environment **from inside** the sandbox, which is the only place it survives.
+```
+org.freedesktop.Platform.VulkanLayer.bones-23.08.flatpak
+org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
+org.freedesktop.Platform.VulkanLayer.bones-25.08.flatpak
+```
 
-Extensions are built for the following runtime versions: `23.08`, `24.08`, `25.08`.
+`make release` builds all of these at once.
 
-### Build requirements
+### Installing the extensions:
 
-- `flatpak`
-- `ostree`
-- `python3`
-- A completed `make` or `make release` build
+Install the bundle matching your `org.freedesktop.Platform` runtime. Run `flatpak list` and look for `org.freedesktop.Platform` if unsure.
 
-### Building the extensions
+```sh
+flatpak install --user org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
+```
 
-    make
-    make flatpak
+Multiple runtime versions can coexist. If you ran `sudo make install` with the extensions already built, they are installed automatically for the invoking user.
 
-This produces one `.flatpak` bundle per supported runtime version:
+```sh
+flatpak uninstall --user org.freedesktop.Platform.VulkanLayer.bones
+```
 
-    org.freedesktop.Platform.VulkanLayer.bones-23.08.flatpak
-    org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
-    org.freedesktop.Platform.VulkanLayer.bones-25.08.flatpak
+### Running a Flatpak application through Bones:
 
-To build everything at once use the release target:
+```sh
+bones -- flatpak run com.example.Game
+bones -- flatpak run --branch=stable com.example.Game   # flags pass through
+bones myprofile -- flatpak run com.example.Game          # named profile
+```
 
-    make release
+Bones detects the `flatpak run` invocation, reads the application metadata to find its entry point, and rewrites the command to run `bones-flatpak` inside the sandbox, which sets the environment and execs the app.
 
-### Installing the extensions
+### Steam launch option (Flatpak):
 
-Install the bundle that matches your `org.freedesktop.Platform` runtime version. If unsure which you have, run `flatpak list` and look for `org.freedesktop.Platform`.
+Set the game **Launch Options** to the in‑sandbox wrapper absolute path:
 
-    flatpak install --user org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
-
-Multiple runtime versions can be installed side by side. If you ran `sudo make install` and the extensions were already built, they are installed automatically for the invoking user. To uninstall:
-
-    flatpak uninstall --user org.freedesktop.Platform.VulkanLayer.bones
-
-### Using Bones with a Flatpak application
-
-Use the `bones` launcher with `flatpak run`:
-
-    bones -- flatpak run com.example.Game
-
-Bones detects the `flatpak run` invocation automatically, reads the application metadata to find its entry point, and rewrites the command to run `bones-flatpak` inside the sandbox. The wrapper then sets the activation environment from within and execs the application. You can pass `flatpak run` flags normally:
-
-    bones -- flatpak run --branch=stable com.example.Game
+```
+/usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
+```
 
 With a named profile:
 
-    bones myprofile -- flatpak run com.example.Game
+```
+BONES_CONFIG_NAME=myprofile /usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
+```
 
-### Steam launch option (Flatpak)
+This requires the Bones Flatpak extension matching the game runtime to be installed.
 
-For a Flatpak game launched through Steam, set the game's **Launch Options** to run the in‑sandbox wrapper using its absolute path inside the extension mount:
+## Usage:
 
-    /usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
+### Profiles:
 
-To use a named profile, prepend `BONES_CONFIG_NAME`:
+A profile is a named config at `~/.config/bones/<name>-config.toml`. The default profile is `bones` (`bones-config.toml`). Pass a name to load a different one:
 
-    BONES_CONFIG_NAME=myprofile /usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
+```sh
+bones retro -- ~/games/retro-game   # loads ~/.config/bones/retro-config.toml
+```
 
-This requires the Bones Flatpak extension matching the game's runtime to be installed.
+### Configuration file:
 
-> [!NOTE]
-> Inside the sandbox, `bones-flatpak` sets `LD_PRELOAD` to the bundled library (OpenGL path) and `VK_ADD_LAYER_PATH` + `VK_INSTANCE_LAYERS` for the explicit Vulkan layer. Host environment variables do not cross the Flatpak boundary, which is why the wrapper sets them from within. The library and its manifest are mounted together, so the manifest's relative library reference resolves correctly.
+The default config is generated at `~/.config/bones/bones-config.toml` on first run, with every effect listed and documented. Set any effect to `true` under its category section (e.g. `mirror_horizontal = true` under `[geometric]`), and `hot_reload = true` under `[general]` for live reloading. Effects are **toggle‑only**, all parameters are baked into the shader.
 
-## Usage
+### Inline configuration (`BONES_CONFIG`):
 
-### Profiles
+Pass enabled effects directly as a semicolon‑separated list. When set, it **overrides the config file entirely**, disables hot reload, and enables exactly the listed effects:
 
-A profile is a named configuration stored in `~/.config/bones/<name>-config.toml`. The default profile is `bones` (file `bones-config.toml`). On this example it will do and load `~/.config/bones/retro-config.toml`.
+```sh
+BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/games/game
+```
 
-    bones retro -- ~/games/retro-game
-
-### Configuration
-
-The default config file is generated at `~/.config/bones/bones-config.toml` on first run, with every effect listed and documented. Set any effect to `true` under its category section to enable it, for example `mirror_horizontal = true` under `[geometric]` or `contrast_adaptive_sharpen = true` under `[sharpening]`. Set `hot_reload = true` under `[general]` to enable live reloading.
-
-### Inline configuration (`BONES_CONFIG`)
-
-Instead of a config file, you can pass enabled effects directly through the `BONES_CONFIG` environment variable as a semicolon‑separated list. When set, it **overrides the config file entirely**, disables hot reload, and enables exactly the listed effects:
-
-    BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/games/game
-
-- Setting `BONES_CONFIG` even to an empty string takes over from the file. An empty value means "no effects", useful to force a clean pass.
+- Setting `BONES_CONFIG`, even to an empty string, takes over from the file. An empty value means "no effects" (a forced clean pass).
 - Unknown effect names are ignored with a warning.
 - Hot reload is always off when `BONES_CONFIG` is used.
+- Works with Flatpak too: pass it on the `bones -- flatpak run …` line and it is forwarded into the sandbox.
 
-This is ideal for reproducible launches and for integrating Bones into other launchers without managing config files. It also works with Flatpak pass it on the `bones -- flatpak run …` command line and it is forwarded into the sandbox.
+### Hot reload:
 
-### Hot Reload
+With `hot_reload = true`, Bones uses `inotify` to watch the config directory. Save changes and the shader recompiles and reloads without restarting the game. If a reload fails to compile, the previous working shader is kept.
 
-When `hot_reload = true`, Bones uses `inotify` to watch the config directory. Save your changes and the shader recompiles and reloads without restarting the game. Hot reload is automatically disabled when configuration comes from `BONES_CONFIG`.
+## Environment Variables:
 
-## Effect Categories
+| Variable | Purpose | Values | Default |
+|----------|---------|--------|---------|
+| `BONES_CONFIG_NAME` | Profile to load | any profile name | `bones` |
+| `BONES_CONFIG` | Inline effect list (overrides the file) | semicolon‑separated effect names | *(unset → use file)* |
+| `BONES_LOG` | Log verbosity (written to stderr) | `off`, `error`, `warn`, `info` | `warn` |
 
-Effects are processed in this fixed order (see the TOML file for full lists): Geometric, Denoise, Anti‑aliasing, Sharpening, Local contrast, Blur, Image quality, Display simulation, Overlay, Temporal, Inline, Exposure, Tonemapping, White balance, Colour grading, Channel curves, Colour balance, Selective colour, Stylization, Accessibility.
+`LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` are set automatically by the launcher; you only set them manually with the `integrated` build.
+
+## Effect Catalogue:
+
+118 effects in 20 categories, applied in the fixed order below. The selection column is the rule of thumb, see the note after the table.
+
+| Category | Section | Count | What it does | Selection |
+|----------|---------|------:|--------------|-----------|
+| 1. Geometric | `[geometric]` | 12 | UV / coordinate warps | mostly combinable |
+| 2. Denoise | `[denoise]` | 1 | clean noise before processing | single |
+| 3. Anti‑aliasing | `[anti_aliasing]` | 4 | smooth jagged edges | **pick one** |
+| 4. Sharpening | `[sharpening]` | 9 | enhance detail | combinable* |
+| 5. Local contrast | `[local_contrast]` | 1 | per‑pixel "pop" | single |
+| 6. Blur | `[blur]` | 5 | creative / soften | pick one |
+| 7. Image quality | `[image_quality]` | 3 | deband, bloom, lens flare | combinable |
+| 8. Display simulation | `[display_simulation]` | 8 | CRT / OLED / VHS looks | **pick one** |
+| 9. Overlay (HUD) | `[overlay]` | 2 | FPS, crosshair | combinable |
+| 10. Temporal | `[temporal]` | 24 | frame blending / TAA | **one primary** + optional guards |
+| 11. Inline | `[inline]` | 7 | grain, vignette, letterbox… | stackable |
+| 12. Exposure | `[exposure]` | 1 | pre‑tonemap exposure | single |
+| 13. Tonemapping | `[tonemapping]` | 8 | HDR → SDR curves | **pick one** |
+| 14. White balance | `[white_balance]` | 3 | colour temperature | **pick one** |
+| 15. Colour grading | `[color_grading]` | 8 | grade / saturation / curves | combinable |
+| 16. Channel curves | `[channel_curves]` | 3 | per‑channel S‑curves | combinable |
+| 17. Colour balance | `[color_balance]` | 1 | teal/orange tint | single |
+| 18. Selective colour | `[selective_color]` | 3 | per‑channel saturation | combinable |
+| 19. Stylization | `[stylization]` | 9 | creative looks | mostly pick one |
+| 20. Accessibility | `[accessibility]` | 6 | CVD simulate / correct | pick one |
+
+Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multiple *strong* sharpeners produces halos.
 
 > [!IMPORTANT]
-> **Enable at most one effect per category, unless specified otherwise.** For example, do not enable two different tonemappers or two anti‑aliasing methods. Some combinations (e.g., a sharpener + midtone clarity) are safe and intended. For temporal, pick one primary mode, optionally with `surface_disocclusion_guard` and/or `convergent_detail_recovery`.
+> **Enable at most one effect per category unless noted otherwise.** Dont run two tonemappers or two AA methods. For temporal, pick one primary mode, optionally paired with `surface_disocclusion_guard` (reduces ghosting) and/or `convergent_detail_recovery` (adds detail back).
+
+<details>
+<summary><b>1. Geometric</b>, UV warps (12)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `identity` | No‑op passthrough (baseline/debug) |
+| `mirror_horizontal` | Flip left ↔ right |
+| `mirror_vertical` | Flip top ↔ bottom |
+| `rotate_90` | Rotate 90° clockwise |
+| `rotate_180` | Rotate 180° |
+| `rotate_270` | Rotate 270° clockwise |
+| `center_zoom` | 1.5× magnify from screen centre |
+| `polynomial_distort` | Brown–Conrady barrel lens distortion (k1/k2) |
+| `barrel_undistort` | Inverse barrel correction (straighten curves) |
+| `fisheye_warp` | Wide‑angle fisheye projection (atan remap) |
+| `trapezoid_warp` | Perspective keystone (wider at bottom) |
+| `sharp_bilinear` | Pixel‑art sharpener via Hermite UV snap |
+</details>
+
+<details>
+<summary><b>2. Denoise</b> (1)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `bilateral_denoise` | Edge‑preserving noise reduction (Tomasi & Manduchi 1998) |
+</details>
+
+<details>
+<summary><b>3. Anti‑aliasing</b>, pick one (4)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `luma_edge_aa` | FXAA (Timothy Lottes, NVIDIA) |
+| `normal_filter_aa` | NFAA, lightweight gradient AA |
+| `morphological_aa` | Conservative CMAA‑style AA |
+| `subpixel_aa` | SMAA‑style subpixel morphological AA |
+</details>
+
+<details>
+<summary><b>4. Sharpening</b>, combinable, dont stack strong ones (9)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `contrast_adaptive_sharpen` | AMD CAS (FidelityFX) |
+| `robust_contrast_sharpen` | AMD RCAS (FSR 1.0), halo‑free |
+| `edge_directed_sharpen` | NVIDIA NIS‑style edge‑aware sharpen |
+| `laplacian_sharpen` | Classic simple sharpen |
+| `luminance_sharpen` | Luma‑only, no colour fringing |
+| `midtone_clarity` | Lightroom‑style "Clarity" |
+| `falloff_sharpen` | Adaptive, gated by local edge energy |
+| `power_curve_sharpen` | Filmic power‑curve response |
+| `unsharp_mask` | Classic darkroom unsharp mask |
+</details>
+
+<details>
+<summary><b>5. Local contrast</b> (1)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `local_contrast` | Per‑pixel local contrast enhancement |
+</details>
+
+<details>
+<summary><b>6. Blur</b>, pick one (5)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `gaussian_blur` | 3×3 Gaussian |
+| `box_blur` | 5×5 uniform box |
+| `bokeh_blur` | Circular DoF with highlight bokeh |
+| `tilt_shift_blur` | Miniature/diorama band blur |
+| `radial_blur` | Zoom/speed blur from centre |
+</details>
+
+<details>
+<summary><b>7. Image quality</b>, combinable (3)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `gradient_deband` | Remove banding in gradients (mpv‑style) |
+| `threshold_bloom` | Bright‑pixel glow |
+| `ghost_flare` | Lens‑flare ghost reflections |
+</details>
+
+<details>
+<summary><b>8. Display simulation</b>, pick one (8)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `crt_simulation` | Full CRT: barrel warp + phosphor mask + scanlines |
+| `phosphor_amber` | Amber monochrome CRT |
+| `phosphor_green` | Green monochrome CRT (classic terminal) |
+| `phosphor_red` | Red monochrome CRT |
+| `scanline_darken` | Scanlines only (no warp/mask) |
+| `oled_simulation` | Black crush + saturation boost |
+| `vhs_simulation` | Tracking jitter, chroma bleed, luma noise |
+| `lcd_subpixel` | Visible RGB subpixel grid |
+</details>
+
+<details>
+<summary><b>9. Overlay (HUD)</b>, combinable (2)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `fps_hud` | On‑screen FPS counter (7‑segment) |
+| `crosshair_overlay` | Centred crosshair |
+</details>
+
+<details>
+<summary><b>10. Temporal</b>, one primary + optional guards (24)</summary>
+
+22 primary frame blending modes plus 2 modifiers you can pair with any primary. Ordered roughly simplest to most sophisticated. I mostly use them on my potato PC.
+
+| Effect | Description |
+|--------|-------------|
+| `neighborhood_clamp_aa` | TAA, neighbourhood min/max clamp |
+| `motion_reject_denoise` | Motion‑gated accumulation |
+| `motion_detect_blur` | Temporal motion blur |
+| `constant_blend_smooth` | 50/50 blend (baseline) |
+| `shutter_angle_smooth` | 180° camera shutter simulation |
+| `spline_interp_smooth` | Catmull‑Rom temporal reconstruction |
+| `variance_decay_smooth` | Variance‑gated IIR filter |
+| `dualrate_smooth` | Dual‑rate adaptive blend |
+| `luminance_gate_smooth` | Smooth dark areas more (scotopic vision) |
+| `contrast_gate_smooth` | Smooth low‑contrast areas more |
+| `gradient_gate_smooth` | Edge‑aware, strong single anti‑ghosting technique |
+| `sigma_clip_smooth` | Variance clipping (modern TAA core, Salvi 2016) |
+| `mitchell_kernel_smooth` | Mitchell–Netravali kernel + temporal |
+| `ycocg_clip_smooth` | YCoCg AABB clamp, the technique at the core of FSR 2 |
+| `bilateral_history_smooth` | Bilateral filter applied in time |
+| `perceptual_chroma_smooth` | YCbCr, aggressive chroma smoothing |
+| `frequency_split_smooth` | Low/high frequency band split blend |
+| `horn_schunck_smooth` | Optical‑flow warp (Horn & Schunck 1981) |
+| `convergent_accumulate` | Detail accumulation, inspired by the principle behind DLSS 2 |
+| `dualwarp_flow_smooth` | Dual‑warp interpolation, inspired by FSR 3 frame generation |
+| `variance_flow_accumulate` | Motion‑compensated, triple‑gated, inspired by the research behind DLSS 2 |
+| `edge_reconstruct_smooth` | Edge‑directed reconstruction, inspired by XeSS DP4a path |
+| `surface_disocclusion_guard` | **Modifier:** history rejection, pair with any mode |
+| `convergent_detail_recovery` | **Modifier:** temporal sharpening, pair with any mode |
+</details>
+
+<details>
+<summary><b>11. Inline</b>, stackable (7)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `gaussian_grain` | Animated film grain (Box–Muller noise) |
+| `chromatic_aberration` | Lateral colour fringing |
+| `red_halation` | Red highlight bloom (film halation) |
+| `anamorphic_streak` | Horizontal blue lens streaks |
+| `radial_vignette` | Darkened edges |
+| `cinematic_letterbox` | 2.35:1 black bars |
+| `ordered_dither` | Bayer 4×4 ordered dithering |
+</details>
+
+<details>
+<summary><b>12. Exposure</b> (1)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `linear_exposure` | Pre‑tonemap exposure multiplier |
+</details>
+
+<details>
+<summary><b>13. Tonemapping</b>, pick one (8)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `aces_tonemap` | ACES filmic (Narkowicz 2015) |
+| `agx_tonemap` | AgX (Blender default), neutral |
+| `reinhard_tonemap` | Reinhard extended (white point 4.0) |
+| `hable_tonemap` | Uncharted 2 filmic (John Hable) |
+| `lottes_tonemap` | Lottes tunable curve |
+| `uchimura_tonemap` | Gran Turismo curve (Uchimura) |
+| `tony_tonemap` | Tony McMapface, lightweight |
+| `khronos_tonemap` | Khronos PBR Neutral |
+</details>
+
+<details>
+<summary><b>14. White balance</b>, pick one (3)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `neutral_white_balance` | D65 reference correction |
+| `warm_temperature` | Warm shift (tungsten) |
+| `cool_temperature` | Cool shift (daylight) |
+</details>
+
+<details>
+<summary><b>15. Colour grading</b>, combinable (8)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `saturation_contrast_grade` | Combined auto‑enhance pass |
+| `levels_remap` | Black/white point remap |
+| `gamma_correct` | Gamma power curve |
+| `vibrance_boost` | Smart saturation (Lightroom Vibrance) |
+| `hsl_transform` | Hue / saturation / lightness in HSL |
+| `split_tone` | Orange‑and‑teal split toning |
+| `lift_gamma_gain` | Three‑way colour corrector |
+| `hermite_curves` | Smooth S‑curve contrast |
+</details>
+
+<details>
+<summary><b>16. Channel curves</b>, combinable (3)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `red_channel_curve` | S‑curve on red |
+| `green_channel_curve` | S‑curve on green |
+| `blue_channel_curve` | S‑curve on blue |
+</details>
+
+<details>
+<summary><b>17. Colour balance</b> (1)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `trizone_color_balance` | Three‑zone teal/orange tint |
+</details>
+
+<details>
+<summary><b>18. Selective colour</b>, combinable (3)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `red_selective_saturate` | Boost saturation of red‑dominant pixels |
+| `green_selective_saturate` | Boost saturation of green‑dominant pixels |
+| `blue_selective_saturate` | Boost saturation of blue‑dominant pixels |
+</details>
+
+<details>
+<summary><b>19. Stylization</b>, mostly pick one (9)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `dynamic_range_crush` | Flat "Instagram" range crush |
+| `duotone_map` | Two‑colour luminance map |
+| `color_wash_tint` | Subtle palette‑unifying tint |
+| `posterize_quantize` | 8‑level posterize |
+| `bleach_bypass` | Desaturated high‑contrast film look |
+| `technicolor_process` | Three‑strip Technicolor |
+| `midpoint_contrast` | Simple contrast boost |
+| `color_invert` | Negative image |
+| `luminance_grayscale` | BT.709 grayscale |
+</details>
+
+<details>
+<summary><b>20. Accessibility</b>, colour vision (6)</summary>
+
+| Effect | Description |
+|--------|-------------|
+| `protanopia_simulate` | Simulate red‑blind vision |
+| `deuteranopia_simulate` | Simulate green‑blind vision |
+| `tritanopia_simulate` | Simulate blue‑blind vision |
+| `protanopia_correct` | Daltonize for protanopia |
+| `deuteranopia_correct` | Daltonize for deuteranopia |
+| `tritanopia_correct` | Daltonize for tritanopia |
+</details>
+
+## Recommended Combinations:
+
+Copy‑paste these as `BONES_CONFIG` values, or set the same keys in your config file. Each respects the one‑per‑category rule.
+
+```sh
+# Crisp modern look, AA, sharpen, smart saturation
+BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/games/game
+
+# Cinematic, filmic tonemap, split tone, and layered inline effects
+BONES_CONFIG="hable_tonemap;split_tone;radial_vignette;cinematic_letterbox;gaussian_grain" bones -- ~/games/game
+
+# Retro CRT
+BONES_CONFIG="crt_simulation" bones -- ~/games/game
+
+# Anti‑flicker temporal stability (edge‑aware + disocclusion guard)
+BONES_CONFIG="gradient_gate_smooth;surface_disocclusion_guard" bones -- ~/games/game
+
+# Colourblind correction (deuteranopia)
+BONES_CONFIG="deuteranopia_correct" bones -- ~/games/game
+```
+
+The cinematic example deliberately stacks several `[inline]` effects, grain, vignette, and letterbox operate independently and are designed to layer.
 
 ## Performance & Limitations
 
-- **VRAM**: O(1) – only three textures (input, output, history) regardless of how many effects are enabled.
-- **Draw calls**: Always 1 full‑screen triangle.
-- **CPU overhead**: Minimal.
-- **Limitations**:
-  - No custom shaders or LUTs.
-  - No multi‑pass effects (e.g., advanced bloom with downsample chains).
-  - Per‑object motion vectors (like true DLSS) are approximated by optical flow from neighbour pixels.
-  - Fast motion may cause ghosting on some temporal modes; use `surface_disocclusion_guard` to reduce it.
-  - OpenGL contexts below 3.0 without `GL_ARB_vertex_array_object` have post‑FX disabled for that context; the application still runs.
+- **VRAM**: O(1), only three textures (input, output, history) regardless of effect count.
+- **Draw calls**: always one full‑screen triangle.
+- **CPU overhead**: minimal.
 
-The order is fixed and cannot be changed at runtime.
+Limitations:
+
+- No custom shaders or LUTs.
+- No multi‑pass effects (e.g. advanced bloom with downsample chains).
+- Per‑object motion vectors (as in true DLSS) are approximated by optical flow from neighbouring pixels.
+- Fast motion can cause ghosting on some temporal modes; use `surface_disocclusion_guard` to reduce it.
+- OpenGL contexts below 3.0 without `GL_ARB_vertex_array_object` have post‑FX disabled for that context; the application still runs.
+
+The effect order is fixed and cannot be changed at runtime.
 
 ## Credits & License
 
-The project is heavily inspired by existing reshade tools, but the ubershader implementation and the majority of the effect code were written from scratch (or ported from GLSL snippets found in public‑domain and open‑source shader repositories).
+Heavily inspired by existing reshade tools, but the ubershader implementation and the majority of the effect code were written from scratch (or ported from GLSL snippets in public‑domain and open‑source shader repositories).
 
-All 118 effect implementations are original or derived from well‑known algorithms (FXAA by Timothy Lottes, CAS/RCAS from AMD GPUOpen, etc.) under their respective licenses (mostly MIT/BSD). The overall project is released under the **GNU General Public License v3.0**. Full text is in the [LICENSE](LICENSE) file.
+All 118 effect implementations are original or derived from well‑known algorithms (FXAA by Timothy Lottes, CAS/RCAS from AMD GPUOpen, AgX, ACES, and others) under their respective licenses (mostly MIT/BSD). The project itself is released under the **GNU General Public License v3.0**, full text in [LICENSE](LICENSE).

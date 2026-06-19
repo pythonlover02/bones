@@ -300,7 +300,7 @@ phosphor_red = false
 scanline_darken = false
 
 # oled_simulation to simulate OLED display characteristic: near black
-#   crush (dark gray become true black via smoothstep) plus saturation
+#   crush (dark gray fade toward black via smoothstep) plus saturation
 #   boost. make the image look like it displayed on a high end OLED TV.
 oled_simulation = false
 
@@ -484,12 +484,12 @@ horn_schunck_smooth = false
 #   ramp from 0.1 to 0.85 as pixel stability increase over time (using
 #   a squared stability curve for gradual convergence). in stable scene
 #   natural game camera jitter mean consecutive frame sample slightly
-#   different sub pixel position to accumulating these produce genuinely
-#   higher resolution detail over time. this be the same principle behind
-#   DLSS 2 temporal accumulation: build up detail from multiple slightly
-#   offset sample. without engine provided jitter it less precise but
-#   natural camera and object micro motion provide enough variation for
-#   visible detail improvement after 5 10 stable frame.
+#   different sub pixel position to accumulating these build up detail
+#   over time. inspired by the principle behind DLSS 2 temporal
+#   accumulation: build up detail from multiple slightly offset sample.
+#   without engine provided jitter it less precise but natural camera
+#   and object micro motion provide enough variation for visible detail
+#   improvement after 5 10 stable frame.
 convergent_accumulate = false
 
 # dualwarp_flow_smooth to dual warp frame interpolation with flow
@@ -598,14 +598,13 @@ cinematic_letterbox = false
 # ordered_dither to Bayer 4x4 ordered dithering (Bayer 1973). add a
 #   spatially structured noise pattern that break up visible color
 #   banding in gradient. the same technique used in GIF image and
-#   retro game console hardware. work with GLSL 1.20 via a
-#   mix/step ladder instead of array indexing.
+#   retro game console hardware.
 ordered_dither = false
 
 [exposure]
-# linear_exposure to linear exposure multiplier applied before tonemapping.
-#   multiply all pixel value by a constant like adjusting the ISO
-#   on a camera. a value of 1.0 be no change.
+# linear_exposure to fixed 1.3x exposure multiplier applied before
+#   tonemapping. multiply all pixel value by a constant like adjusting
+#   the ISO on a camera. on/off only.
 linear_exposure = false
 
 [tonemapping]
@@ -628,7 +627,8 @@ agx_tonemap = false
 
 # reinhard_tonemap to Reinhard extended with white point (Reinhard et al.
 #   2002). the first practical tone mapping operator still popular for
-#   it natural gentle highlight rolloff. white point at 4.0.
+#   it natural gentle highlight rolloff. white point constant 4.0
+#   (enters squared per the extended Reinhard form).
 reinhard_tonemap = false
 
 # hable_tonemap to the Uncharted 2 filmic curve by John Hable (GDC 2010).
@@ -657,7 +657,7 @@ tony_tonemap = false
 
 # khronos_tonemap to Khronos PBR Neutral tone mapping from the Khronos
 #   Group PBR specification. soft highlight compression starting at
-#   peak luminance 0.8. designed for physically based rendering pipeline
+#   peak luminance 0.76. designed for physically based rendering pipeline
 #   where color accuracy matter more than dramatic curve.
 khronos_tonemap = false
 
@@ -685,15 +685,15 @@ cool_temperature = false
 #   look better" adjustment similar to auto enhance in phone camera.
 saturation_contrast_grade = false
 
-# levels_remap to input/output black and white point remapping. the same
-#   as Photoshop Level adjustment to map the input range [in_black
-#   in_white] to the output range [out_black out_white]. useful for
-#   expanding or compressing the tonal range.
+# levels_remap to black/white point remapping in the spirit of the
+#   Photoshop Levels adjustment. pull the input range slightly inward
+#   (0.02 to 0.98) and rescale to full range for a gentle contrast
+#   expansion. on/off only.
 levels_remap = false
 
-# gamma_correct to gamma curve adjustment. apply a power function to
-#   all channel. gamma < 1.0 brighten midtone gamma > 1.0 darken
-#   them. the same gamma correction used in display calibration.
+# gamma_correct to fixed gamma curve that darken midtone slightly
+#   (gamma 1.1). apply a power function to all channel. the same gamma
+#   correction used in display calibration. on/off only.
 gamma_correct = false
 
 # vibrance_boost to smart saturation. boost saturation on pixel that
@@ -703,9 +703,8 @@ gamma_correct = false
 #   "Saturation" which boost everything equally).
 vibrance_boost = false
 
-# hsl_transform to hue rotation saturation scale and lightness scale
-#   in HSL color space. the same HSL adjustment available in Photoshop
-#   Hue/Saturation dialog.
+# hsl_transform to a mild saturation boost (1.1x) in HSL color space,
+#   in the spirit of the Photoshop Hue/Saturation dialog. on/off only.
 hsl_transform = false
 
 # split_tone to tint shadow cool (blue) and highlight warm (amber)
@@ -714,10 +713,9 @@ hsl_transform = false
 #   same concept as Lightroom Split Toning panel.
 split_tone = false
 
-# lift_gamma_gain to three way color corrector. lift adjust shadow
-#   gamma adjust midtone gain adjust highlight. the standard
-#   three way color correction tool in DaVinci Resolve Premiere Pro
-#   and every professional color grading application.
+# lift_gamma_gain to a slight shadow lift (the "lift" of a three way
+#   color corrector), the standard tool in DaVinci Resolve, Premiere
+#   Pro and every professional color grading application. on/off only.
 lift_gamma_gain = false
 
 # hermite_curves to s curve contrast via Hermite smoothstep (3t² to 2t³)
@@ -2439,8 +2437,8 @@ void main() {
 
     #ifdef ENABLE_LEVELS_REMAP
         {
-            const float IB = 0.0;
-            const float IW = 1.0;
+            const float IB = 0.02;
+            const float IW = 0.98;
             const float OB = 0.0;
             const float OW = 1.0;
             c = clamp((c - vec3(IB)) / max(vec3(IW - IB), vec3(0.0001)), 0.0, 1.0) *
@@ -2450,7 +2448,7 @@ void main() {
 
     #ifdef ENABLE_GAMMA_CORRECT
         {
-            const float GV = 1.0;
+            const float GV = 1.1;
             c = pow(max(c, vec3(0.0)), vec3(1.0 / max(GV, 0.0001)));
         }
     #endif
@@ -2469,7 +2467,7 @@ void main() {
     #ifdef ENABLE_HSL_TRANSFORM
         {
             const float HH = 0.0;
-            const float HS2 = 1.0;
+            const float HS2 = 1.1;
             const float HL = 1.0;
             float hmx = max(c.r, max(c.g, c.b));
             float hmn = min(c.r, min(c.g, c.b));
@@ -2510,7 +2508,7 @@ void main() {
 
     #ifdef ENABLE_LIFT_GAMMA_GAIN
         {
-            const float LL = 0.0;
+            const float LL = 0.03;
             const float LG2 = 1.0;
             const float LN = 1.0;
             c = pow(max(c * LN + vec3(LL) * (vec3(1.0) - c), vec3(0.0)),

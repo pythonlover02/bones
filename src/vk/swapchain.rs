@@ -5,9 +5,12 @@ use std::sync::Mutex;
 use ash::vk;
 use ash::vk::Handle;
 
+use std::sync::atomic::Ordering;
+
 use crate::consts::PUSH_BYTES;
 use crate::logging::{LogLevel, log_at};
 use crate::shader::current_spv;
+use crate::shader::GENERATION;
 
 use super::device::VkDevState;
 use super::memory::create_offscreen_image;
@@ -39,6 +42,7 @@ pub(crate) struct VkSwapState {
     pub(crate) cmd_bufs: Vec<vk::CommandBuffer>,
     pub(crate) semaphores: Vec<vk::Semaphore>,
     pub(crate) fences: Vec<vk::Fence>,
+    pub(crate) gen: i32,
 }
 
 static SWAP_FX: Mutex<Option<HashMap<u64, VkSwapState>>> = Mutex::new(None);
@@ -209,7 +213,46 @@ pub(crate) fn build_swap_state(
         tex_input, tex_input_mem, tex_input_view, tex_output, tex_output_mem, tex_output_view,
         tex_history, tex_history_mem, tex_history_view, history_init: false,
         cmd_pool, cmd_bufs, semaphores, fences,
+        gen: GENERATION.load(Ordering::Relaxed),
     })
+}
+
+fn pipeline_gen_stale(st_gen: i32, cur_gen: i32) -> bool {
+    st_gen != cur_gen
+}
+
+fn spv_is_ready(spv: &[u32]) -> bool {
+    !spv.is_empty()
+}
+
+fn call_wait_all_fences(dev: &VkDevState, fences: &[vk::Fence]) {
+    unsafe { let _ = dev.device.wait_for_fences(fences, true, u64::MAX); }
+}
+
+fn try_rebuild_pipeline(dev: &VkDevState, st: &VkSwapState, spv: &[u32]) -> Result<vk::Pipeline, ()> {
+    call_wait_all_fences(dev, &st.fences);
+    create_pipeline(dev, st.pipeline_layout, st.render_pass, st.extent, spv)
+}
+
+fn apply_pipeline_rebuild(dev: &VkDevState, st: &mut VkSwapState, result: Result<vk::Pipeline, ()>, gen: i32) {
+    match result {
+        Ok(p) => {
+            unsafe { dev.device.destroy_pipeline(st.pipeline, None); }
+            st.pipeline = p;
+            st.gen = gen;
+            log_at(LogLevel::Info, "vk pipeline rebuilt for hot reload");
+        }
+        Err(()) => log_at(LogLevel::Error, "vk pipeline rebuild failed, will retry next present"),
+    }
+}
+
+pub(crate) fn check_rebuild_pipeline(dev: &VkDevState, st: &mut VkSwapState) {
+    let gen = GENERATION.load(Ordering::Relaxed);
+    let spv = current_spv();
+    match pipeline_gen_stale(st.gen, gen) && spv_is_ready(&spv) {
+        true => apply_pipeline_rebuild(dev, st, try_rebuild_pipeline(dev, st, &spv), gen),
+        false => (),
+    }
 }
 
 pub(crate) fn destroy_swap_state(dev: &VkDevState, st: &VkSwapState) {
@@ -263,30 +306,29 @@ fn try_register_postfx(d: &VkDevState, dev: vk::Device, sc: vk::SwapchainKHR, ci
     }
 }
 
+fn upgrade_usage(ci: &vk::SwapchainCreateInfoKHR) -> vk::SwapchainCreateInfoKHR {
+    vk::SwapchainCreateInfoKHR {
+        image_usage: ci.image_usage
+            | vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST,
+        ..*ci
+    }
+}
+
 pub(crate) fn create_swapchain_with_fx(
     d: &VkDevState,
     dev: vk::Device,
     ci: *const vk::SwapchainCreateInfoKHR,
     alloc: *const vk::AllocationCallbacks,
     out: *mut vk::SwapchainKHR,
-    fx_wanted: bool,
 ) -> vk::Result {
-    let upgraded = unsafe {
-        vk::SwapchainCreateInfoKHR {
-            image_usage: (*ci).image_usage
-                | vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::TRANSFER_DST,
-            ..*ci
-        }
-    };
-    let r1 = unsafe { (d.swap_fp.create_swapchain_khr)(dev, &upgraded, alloc, out) };
-    match (r1, fx_wanted) {
-        (vk::Result::SUCCESS, true) => {
+    let upgraded = upgrade_usage(unsafe { &*ci });
+    match unsafe { (d.swap_fp.create_swapchain_khr)(dev, &upgraded, alloc, out) } {
+        vk::Result::SUCCESS => {
             try_register_postfx(d, dev, unsafe { *out }, &upgraded);
             vk::Result::SUCCESS
         }
-        (vk::Result::SUCCESS, false) => vk::Result::SUCCESS,
-        (_, _) => call_create_swapchain_fallback(d, dev, ci, alloc, out),
+        _ => call_create_swapchain_fallback(d, dev, ci, alloc, out),
     }
 }

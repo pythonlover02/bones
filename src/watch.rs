@@ -16,8 +16,8 @@ use crate::config::Settings;
 use crate::consts::DEBOUNCE_MS;
 use crate::consts::EffectDef;
 use crate::consts::INOTIFY_BUF;
+use crate::consts::POLL_BLOCK;
 use crate::consts::REGISTRY;
-use crate::consts::WATCH_SLEEP_MS;
 use crate::effect::any_effect_enabled;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
@@ -41,9 +41,19 @@ fn call_inotify_read(fd: i32) -> isize {
     unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, INOTIFY_BUF) }
 }
 
-fn call_inotify_drain(fd: i32) {
-    let mut buf = [0u8; INOTIFY_BUF];
-    unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, INOTIFY_BUF) };
+fn call_poll_fd(fd: i32, timeout_ms: i32) -> i32 {
+    let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+    unsafe { libc::poll(&mut pfd, 1, timeout_ms) }
+}
+
+fn has_events(result: i32) -> bool {
+    result > 0
+}
+
+fn call_inotify_drain_all(fd: i32) {
+    std::iter::repeat_with(|| call_inotify_read(fd))
+        .take_while(|n| *n > 0)
+        .for_each(drop);
 }
 
 fn fd_is_valid(fd: i32) -> bool {
@@ -60,21 +70,23 @@ fn poll_dirty() -> bool {
 
 fn watch_loop(fd: i32) {
     std::iter::repeat(()).for_each(|_| {
-        match call_inotify_read(fd) > 0 {
+        match has_events(call_poll_fd(fd, POLL_BLOCK)) {
             true => {
+                call_inotify_drain_all(fd);
                 thread::sleep(Duration::from_millis(DEBOUNCE_MS));
-                call_inotify_drain(fd);
+                call_inotify_drain_all(fd);
                 DIRTY.store(true, Ordering::Relaxed);
             }
             false => (),
         }
-        thread::sleep(Duration::from_millis(WATCH_SLEEP_MS));
     });
 }
 
 fn start_watcher(fd: i32) {
-    call_inotify_watch(fd, &config_dir());
-    thread::spawn(move || watch_loop(fd));
+    match fd_is_valid(call_inotify_watch(fd, &config_dir())) {
+        true => { thread::spawn(move || watch_loop(fd)); }
+        false => log_at(LogLevel::Warn, "inotify add watch failed, hot reload disabled"),
+    }
 }
 
 fn init_inotify() {
@@ -89,13 +101,12 @@ fn init_inotify() {
 
 fn apply_reload(s: Settings, gl: String, spv: Vec<u32>, reg: &[EffectDef]) {
     match reload_is_broken(&spv, &s, reg) {
-        true => log_at(LogLevel::Error, "hot reload: compilation failed, keeping previous working state"),
-        false => {
-            store_shaders(gl, spv);
-            store_settings(s);
-            log_at(LogLevel::Info, "hot reload applied");
-        }
+        true => log_at(LogLevel::Warn, "hot reload: spirv compile failed, vulkan postfx will not update"),
+        false => (),
     }
+    store_shaders(gl, spv);
+    store_settings(s);
+    log_at(LogLevel::Info, "hot reload applied");
 }
 
 pub(crate) fn setup_watch(s: &Settings) {

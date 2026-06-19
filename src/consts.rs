@@ -22,13 +22,14 @@ pub(crate) const FLATPAK_INFO: &str = "info";
 pub(crate) const FLATPAK_SHOW_META: &str = "--show-metadata";
 
 pub(crate) const CONFIG_SEP: char = ';';
+pub(crate) const ENV_SEP: char = ':';
+pub(crate) const POLL_BLOCK: i32 = -1;
 
 pub(crate) const LOG_FD: i32 = 2;
 pub(crate) const US_PER_S: f32 = 1_000_000.0;
 pub(crate) const MAX_FPS_REPORT: f32 = 9999.0;
 pub(crate) const MIN_DELTA_US: u64 = 1;
 pub(crate) const INOTIFY_BUF: usize = 4096;
-pub(crate) const WATCH_SLEEP_MS: u64 = 250;
 pub(crate) const DEBOUNCE_MS: u64 = 100;
 
 pub(crate) const LOG_LEVEL_OFF: i32 = 0;

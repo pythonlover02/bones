@@ -6,6 +6,8 @@ use ash::vk;
 use ash::vk::Handle;
 
 use crate::config::ensure_settings;
+use crate::config::Settings;
+use crate::consts::EffectDef;
 use crate::consts::LAYER_DESC;
 use crate::consts::LAYER_IFACE_VERSION;
 use crate::consts::LAYER_LINK_INFO;
@@ -273,13 +275,12 @@ unsafe extern "system" fn vkCreateSwapchainKHR(
     alloc: *const vk::AllocationCallbacks,
     out: *mut vk::SwapchainKHR,
 ) -> vk::Result {
-    let s = ensure_settings();
+    let _ = ensure_settings();
     match devs_get(dev.as_raw()) {
         None => vk::Result::ERROR_INITIALIZATION_FAILED,
-        Some(d) => create_swapchain_with_fx(&d, dev, ci, alloc, out, any_effect_enabled(&s, &REGISTRY)),
+        Some(d) => create_swapchain_with_fx(&d, dev, ci, alloc, out),
     }
 }
-
 unsafe extern "system" fn vkDestroySwapchainKHR(
     dev: vk::Device,
     sc: vk::SwapchainKHR,
@@ -296,8 +297,8 @@ unsafe extern "system" fn vkDestroySwapchainKHR(
     }
 }
 
-fn present_has_fx(info: *const vk::PresentInfoKHR) -> bool {
-    unsafe {
+fn present_has_fx(info: *const vk::PresentInfoKHR, s: &Settings, reg: &[EffectDef]) -> bool {
+    any_effect_enabled(s, reg) && unsafe {
         std::slice::from_raw_parts((*info).p_swapchains, (*info).swapchain_count as usize)
             .iter()
             .any(|sc| swap_has(sc.as_raw()))
@@ -306,7 +307,7 @@ fn present_has_fx(info: *const vk::PresentInfoKHR) -> bool {
 
 unsafe extern "system" fn vkQueuePresentKHR(queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
     maybe_reload();
-    match (queue_owner(queue), present_has_fx(info)) {
+    match (queue_owner(queue), present_has_fx(info, &ensure_settings(), &REGISTRY)) {
         (Some(d), true) => run_vk_present_chain(&d, queue, info),
         (Some(d), false) => call_real_queue_present(&d, queue, info),
         (None, _) => vk::Result::ERROR_DEVICE_LOST,

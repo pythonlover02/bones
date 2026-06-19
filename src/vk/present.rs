@@ -8,6 +8,7 @@ use crate::timing::frame_time_fps;
 
 use super::device::VkDevState;
 use super::swapchain::*;
+use super::swapchain::check_rebuild_pipeline;
 
 fn barrier(
     dev: &VkDevState, cb: vk::CommandBuffer, img: vk::Image,
@@ -221,7 +222,7 @@ fn submit_postfx(
 fn record_postfx_pass(
     queue: vk::Queue, dev: &VkDevState, sc_raw: u64, idx: usize, waits: Vec<vk::Semaphore>,
 ) -> Vec<vk::Semaphore> {
-    match swap_fx_lock_mut(sc_raw, |st| extract_postfx_frame(st, idx)) {
+    match swap_fx_lock_mut(sc_raw, |st| { check_rebuild_pipeline(dev, st); extract_postfx_frame(st, idx) }) {
         None => waits,
         Some(frame) => {
             call_wait_and_reset_fence(dev, frame.fence);

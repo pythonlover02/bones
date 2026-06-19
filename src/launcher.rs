@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use crate::consts::DEV_DIR;
 use crate::consts::DEV_LIB;
 use crate::consts::ENV_CONFIG_NAME;
 use crate::consts::ENV_PRELOAD;
+use crate::consts::ENV_SEP;
 use crate::consts::ENV_VK_ADD_LAYER_PATH;
 use crate::consts::ENV_VK_INSTANCE_LAYERS;
 use crate::consts::FLATPAK_CMD;
@@ -199,6 +201,24 @@ fn exec_flatpak(cmd: &[String], profile: &str) -> i32 {
     }
 }
 
+fn val_in_list(existing: &str, val: &str, sep: char) -> bool {
+    existing.split(sep).any(|s| s == val)
+}
+
+fn join_env(val: &str, prev: &str, sep: char) -> String {
+    match val_in_list(prev, val, sep) {
+        true => prev.to_string(),
+        false => format!("{}{}{}", val, sep, prev),
+    }
+}
+
+fn prepend_env(val: &str, existing: Option<String>, sep: char) -> String {
+    match existing.filter(|s| !s.is_empty()) {
+        Some(prev) => join_env(val, &prev, sep),
+        None => val.to_string(),
+    }
+}
+
 fn exec_native(cmd: &[String], profile: &str) -> i32 {
     exec_child(cmd, profile, &resolve(&lib_paths(), INSTALL_LIB), &resolve(&dir_paths(), INSTALL_DIR))
 }
@@ -207,9 +227,9 @@ fn exec_child(full: &[String], profile: &str, preload: &str, layer_dir: &str) ->
     let err = Command::new(&full[0])
         .args(&full[1..])
         .env(ENV_CONFIG_NAME, profile)
-        .env(ENV_PRELOAD, preload)
-        .env(ENV_VK_ADD_LAYER_PATH, layer_dir)
-        .env(ENV_VK_INSTANCE_LAYERS, LAYER_NAME)
+        .env(ENV_PRELOAD, prepend_env(preload, env::var(ENV_PRELOAD).ok(), ENV_SEP))
+        .env(ENV_VK_ADD_LAYER_PATH, prepend_env(layer_dir, env::var(ENV_VK_ADD_LAYER_PATH).ok(), ENV_SEP))
+        .env(ENV_VK_INSTANCE_LAYERS, prepend_env(LAYER_NAME, env::var(ENV_VK_INSTANCE_LAYERS).ok(), ENV_SEP))
         .exec();
     log_at(LogLevel::Error, &format!("exec failed: {}", err));
     127

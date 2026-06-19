@@ -168,9 +168,9 @@ robust_contrast_sharpen = false
 # edge_directed_sharpen to edge aware sharpening based on NVIDIA NIS
 #   (NVIDIA Image Scaling open source). measure gradient magnitude to
 #   determine how much each pixel be on an edge then scale sharpening
-#   inversely to flat area (texture skin) get full sharpening strong
-#   edge get minimal sharpening. avoid the edge halo that plague
-#   simpler sharpener.
+#   proportionally so edge get full sharpening and flat area (texture
+#   skin) get minimal sharpening. concentrate detail enhancement where
+#   structure exist rather than amplifying noise in smooth region.
 edge_directed_sharpen = false
 
 # laplacian_sharpen to the simplest possible sharpener: center pixel minus
@@ -260,10 +260,10 @@ radial_blur = false
 gradient_deband = false
 
 # threshold_bloom to bright pixel glow. find pixel above a brightness
-#   threshold (0.7) accumulate their excess brightness from surrounding
-#   neighbor and add it back as a soft glow. similar to the bloom pass
-#   in Unreal Engine and most modern game engine but running as a
-#   post process. make bright light explosion and reflection "glow".
+#   threshold (0.7) accumulate their excess brightness from the immediate
+#   neighbor and add it back as a local glow. a single pass small radius
+#   approximation of the multi pass bloom used in game engine. make
+#   bright light explosion and reflection "glow" at close range.
 threshold_bloom = false
 
 # ghost_flare to lens flare ghost simulation. sample bright spot at

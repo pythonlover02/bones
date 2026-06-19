@@ -324,9 +324,9 @@ lcd_subpixel = false
 fps_hud = false
 
 # crosshair_overlay to centered crosshair with gap arm and center dot
-#   all resolution scaled. high visibility green. useful for game that
-#   lack a built in crosshair or when you want a consistent crosshair
-#   across different game.
+#   all resolution scaled. styled with a neon blue core and glow to
+#   match the fps hud. useful for game that lack a built in crosshair
+#   or when you want a consistent crosshair across different game.
 crosshair_overlay = false
 
 [temporal]
@@ -1828,18 +1828,32 @@ void main() {
 
     #ifdef ENABLE_CROSSHAIR_OVERLAY
         {
-            const float CG = 4.0;
-            const float CL = 10.0;
-            const float CT = 1.0;
-            const float CD = 1.5;
             float cs = res_scale;
-            vec2 cp = gl_FragCoord.xy - u_resolution * 0.5;
-            float ch = step(CG * cs, abs(cp.x)) *
-                       step(abs(cp.x), (CG + CL) * cs) * step(abs(cp.y), CT * cs);
-            float cv = step(CG * cs, abs(cp.y)) *
-                       step(abs(cp.y), (CG + CL) * cs) * step(abs(cp.x), CT * cs);
-            float cd = step(length(cp), CD * cs);
-            c = mix(c, vec3(0.0, 1.0, 0.0), clamp(ch + cv + cd, 0.0, 1.0));
+            vec2 cp = abs(gl_FragCoord.xy - u_resolution * 0.5);
+
+            float d_dot = max(0.0, length(cp) - 0.5 * cs);
+
+            vec2 pa_h = cp - vec2(4.0 * cs, 0.0);
+            float h_h = clamp(pa_h.x / (10.0 * cs), 0.0, 1.0);
+            float d_arm_h = length(pa_h - vec2(10.0 * cs * h_h, 0.0));
+
+            vec2 pa_v = cp - vec2(0.0, 4.0 * cs);
+            float h_v = clamp(pa_v.y / (10.0 * cs), 0.0, 1.0);
+            float d_arm_v = length(pa_v - vec2(0.0, 10.0 * cs * h_v));
+
+            float d_cross = min(d_dot, min(d_arm_h, d_arm_v));
+
+            float line_thickness = 1.0 * cs;
+            float glow_thickness = 4.0 * cs;
+
+            float cross_core = 1.0 - smoothstep(line_thickness - 0.5 * cs, line_thickness + 0.5 * cs, d_cross);
+            float cross_glow = 1.0 - smoothstep(line_thickness, glow_thickness, d_cross);
+
+            vec3 color_glow = vec3(0.0, 0.5, 1.0);
+            vec3 color_core = vec3(0.85, 0.95, 1.0);
+
+            c = mix(c, color_glow, cross_glow * 0.85);
+            c = mix(c, color_core, cross_core);
         }
     #endif
 

@@ -408,7 +408,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 | Effect | Description |
 |--------|-------------|
 | `fps_hud` | On‑screen FPS counter (7‑segment) |
-| `crosshair_overlay` | Centred crosshair |
+| `crosshair_overlay` | Centred neon crosshair |
 </details>
 
 <details>

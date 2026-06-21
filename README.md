@@ -5,11 +5,11 @@
 
 **A GLSL ubershader post‑processing tool for Linux games (OpenGL · OpenGL ES · Vulkan).**
 
-Bones is a realtime post‑processing tool written in Rust. It intercepts OpenGL and Vulkan buffer swaps, runs a single‑pass ubershader containing 118 effects, and presents the modified frame. It is built for **performance** and **simplicity**: no external shader loading, no custom LUTs, no user‑tunable parameters, no ping‑pong. Every enabled effect is compiled into one shader pass, so VRAM usage and draw‑call count stay constant no matter how many effects you turn on.
+Bones is a realtime post‑processing tool written in Rust. It intercepts OpenGL and Vulkan buffer swaps, runs a single‑pass ubershader containing 125 effects, and presents the modified frame. It is built for **performance** and **simplicity**: no external shader loading, no custom LUTs, no user‑tunable parameters, no ping‑pong. Every enabled effect is compiled into one shader pass, so VRAM usage and draw‑call count stay constant no matter how many effects you turn on.
 
 ### At a glance:
 
-- **118 effects** across 20 categories, geometry, AA, sharpening, 24 temporal modes, bloom, CRT/OLED/VHS, colour grading, colourblind correction, and more.
+- **125 effects** across 20 categories, geometry, AA, sharpening, 22 temporal modes, 9 console GPU simulations (PS1 through Xbox 360), CRT/OLED/VHS, colour grading, colourblind correction, and more.
 - **One shader, one draw call**, effects are `#ifdef`‑toggled in a single ubershader. VRAM is O(1) (three textures total).
 - **OpenGL + Vulkan** in one tool, native GLX/EGL hooking *and* an explicit Vulkan layer, simultaneously.
 - **Hot reload**, edit the config while the game runs; the shader recompiles live.
@@ -85,7 +85,10 @@ In both paths the pipeline is identical:
 
 Unlike traditional reshade pipelines that chain multiple passes (ping‑pong between FBOs), Bones **never uses more than one draw call**. All effects are compiled into one large shader guarded by `#ifdef`. This keeps VRAM constant and avoids multi‑pass overhead.
 
-Effects run in a **fixed order** (UV warp → spatial → temporal → inline → colour grading). Enabling two effects from the same category can produce unexpected results, so for best results enable only one per category unless they are designed to combine.
+Effects run in a **fixed order** designed around three semantic stages: *render the ideal image* (geometric warps, denoise, AA, sharpening, blur, image quality, temporal, exposure, tonemap, grading, accessibility), *apply lens/film effects* (inline grain, vignette, dither), then *show it on a chosen monitor* (hardware sims act as the display device). Overlays render last. Enabling two effects from the same category can produce unexpected results, so for best results enable only one per category unless they are designed to combine.
+
+> [!NOTE]
+> Hardware simulations are **terminal display effects**. AA, sharpen, and TAA run *before* the sim, so they operate on the ideal frame; the sim then interprets that frame as if it were going through PS1/CRT/VHS hardware. This matches how real emulator shader chains work.
 
 ## Installation:
 
@@ -111,7 +114,7 @@ Produces `target/release/bones` and `target/release/libbones.so`.
 
 ### Portable release build:
 
-Builds the library inside a Debian Bookworm container (for maximum glibc compatibility) plus all Flatpak extensions. Requires `podman` or `docker`, `flatpak`, `ostree`, and `python3`.
+Builds the library inside a Debian Bookworm container (for maximum glibc compatibility) plus all Flatpak extensions. Requires `podman` or `docker`, `flatpak`, `ostree`,and `python3`.
 
 ```sh
 make release
@@ -273,35 +276,38 @@ With `hot_reload = true`, Bones uses `inotify` to watch the config directory. Sa
 
 ## Effect Catalogue:
 
-118 effects in 20 categories, applied in the fixed order below. The selection column is the rule of thumb, see the note after the table.
+125 effects in 21 categories, applied in the fixed order below. The selection column is the rule of thumb, see the note after the table.
 
-| Category | Section | Count | What it does | Selection |
-|----------|---------|------:|--------------|-----------|
-| 1. Geometric | `[geometric]` | 12 | UV / coordinate warps | mostly combinable |
-| 2. Denoise | `[denoise]` | 1 | clean noise before processing | single |
-| 3. Anti‑aliasing | `[anti_aliasing]` | 4 | smooth jagged edges | **pick one** |
-| 4. Sharpening | `[sharpening]` | 9 | enhance detail | combinable* |
-| 5. Local contrast | `[local_contrast]` | 1 | per‑pixel "pop" | single |
-| 6. Blur | `[blur]` | 5 | creative / soften | pick one |
-| 7. Image quality | `[image_quality]` | 3 | deband, bloom, lens flare | combinable |
-| 8. Display simulation | `[display_simulation]` | 8 | CRT / OLED / VHS looks | **pick one** |
-| 9. Overlay (HUD) | `[overlay]` | 2 | FPS, crosshair | combinable |
-| 10. Temporal | `[temporal]` | 24 | frame blending / TAA | **one primary** + optional guards |
-| 11. Inline | `[inline]` | 7 | grain, vignette, letterbox… | stackable |
-| 12. Exposure | `[exposure]` | 1 | pre‑tonemap exposure | single |
-| 13. Tonemapping | `[tonemapping]` | 8 | HDR → SDR curves | **pick one** |
-| 14. White balance | `[white_balance]` | 3 | colour temperature | **pick one** |
-| 15. Colour grading | `[color_grading]` | 8 | grade / saturation / curves | combinable |
-| 16. Channel curves | `[channel_curves]` | 3 | per‑channel S‑curves | combinable |
-| 17. Colour balance | `[color_balance]` | 1 | teal/orange tint | single |
-| 18. Selective colour | `[selective_color]` | 3 | per‑channel saturation | combinable |
-| 19. Stylization | `[stylization]` | 9 | creative looks | mostly pick one |
-| 20. Accessibility | `[accessibility]` | 6 | CVD simulate / correct | pick one |
+| Order | Category | Section | Count | What it does | Selection |
+|------:|----------|---------|------:|--------------|-----------|
+| 1 | Geometric | `[geometric]` | 12 | UV / coordinate warps | mostly combinable |
+| 2 | Denoise | `[denoise]` | 1 | clean noise before processing | single |
+| 3 | Anti‑aliasing | `[anti_aliasing]` | 4 | smooth jagged edges | **pick one** |
+| 4 | Sharpening | `[sharpening]` | 9 | enhance detail | combinable* |
+| 5 | Local contrast | `[local_contrast]` | 1 | per‑pixel "pop" | single |
+| 6 | Blur | `[blur]` | 5 | creative / soften | pick one |
+| 7 | Image quality | `[image_quality]` | 3 | deband, bloom, lens flare | combinable |
+| 8 | Temporal | `[temporal]` | 22 | frame blending / TAA | **one primary** (guards auto) |
+| 9 | Exposure | `[exposure]` | 1 | pre‑tonemap exposure | single |
+| 10 | Tonemapping | `[tonemapping]` | 8 | HDR → SDR curves | **pick one** |
+| 11 | White balance | `[white_balance]` | 3 | colour temperature | **pick one** |
+| 12 | Colour grading | `[color_grading]` | 8 | grade / saturation / curves | combinable |
+| 13 | Channel curves | `[channel_curves]` | 3 | per‑channel S‑curves | combinable |
+| 14 | Colour balance | `[color_balance]` | 1 | teal/orange tint | single |
+| 15 | Selective colour | `[selective_color]` | 3 | per‑channel saturation | combinable |
+| 16 | Stylization | `[stylization]` | 9 | creative looks | mostly pick one |
+| 17 | Accessibility | `[accessibility]` | 6 | CVD simulate / correct | pick one |
+| 18 | Inline | `[inline]` | 7 | grain, vignette, letterbox… | stackable |
+| 19 | Hardware simulation | `[hardware_simulation]` | 17 | Console GPU sims + CRT / OLED / VHS | one console + one display |
+| 20 | Overlay (HUD) | `[overlay]` | 2 | FPS, crosshair | combinable |
 
 Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multiple *strong* sharpeners produces halos.
 
 > [!IMPORTANT]
-> **Enable at most one effect per category unless noted otherwise.** Dont run two tonemappers or two AA methods. For temporal, pick one primary mode, optionally paired with `surface_disocclusion_guard` (reduces ghosting) and/or `convergent_detail_recovery` (adds detail back).
+> **Enable at most one effect per category unless noted otherwise.** Dont run two tonemappers or two AA methods. For temporal, pick one primary mode; a fused stabilizer (`convergent_detail_recovery`) activates automatically whenever any temporal mode is enabled, combining a lightweight disocclusion gate with a convergence pull. For hardware simulation, pick one console sim and optionally one display sim.
+
+> [!NOTE]
+> Combining a temporal mode with a hardware sim is supported but the history texture captures the post‑sim image; TAA reads PS1/CRT distorted history on the next frame. This produces a "weird but not broken" look. If you want clean TAA, dont stack a sim on top.
 
 <details>
 <summary><b>1. Geometric</b>, UV warps (12)</summary>
@@ -371,7 +377,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 | Effect | Description |
 |--------|-------------|
 | `gaussian_blur` | 3×3 Gaussian |
-| `box_blur` | 5×5 uniform box |
+| `box_blur` | Kawase dual‑filter wide blur |
 | `bokeh_blur` | Circular DoF with highlight bokeh |
 | `tilt_shift_blur` | Miniature/diorama band blur |
 | `radial_blur` | Zoom/speed blur from centre |
@@ -388,33 +394,9 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>8. Display simulation</b>, pick one (8)</summary>
+<summary><b>8. Temporal</b>, one primary, guards automatic (22)</summary>
 
-| Effect | Description |
-|--------|-------------|
-| `crt_simulation` | Full CRT: barrel warp + phosphor mask + scanlines |
-| `phosphor_amber` | Amber monochrome CRT |
-| `phosphor_green` | Green monochrome CRT (classic terminal) |
-| `phosphor_red` | Red monochrome CRT |
-| `scanline_darken` | Scanlines only (no warp/mask) |
-| `oled_simulation` | Black crush + saturation boost |
-| `vhs_simulation` | Tracking jitter, chroma bleed, luma noise |
-| `lcd_subpixel` | Visible RGB subpixel grid |
-</details>
-
-<details>
-<summary><b>9. Overlay (HUD)</b>, combinable (2)</summary>
-
-| Effect | Description |
-|--------|-------------|
-| `fps_hud` | On‑screen FPS counter (7‑segment) |
-| `crosshair_overlay` | Centred neon crosshair |
-</details>
-
-<details>
-<summary><b>10. Temporal</b>, one primary + optional guards (24)</summary>
-
-22 primary frame blending modes plus 2 modifiers you can pair with any primary. Ordered roughly simplest to most sophisticated. I mostly use them on my potato PC.
+22 primary frame blending modes. A fused stabilizer (`convergent_detail_recovery`) activates automatically whenever any temporal mode is enabled; it gates history influence on large per‑pixel changes (acting as a lightweight disocclusion guard) and pulls the current frame toward the converged history to recover detail. Ordered roughly simplest to most sophisticated. I mostly use them on my potato PC.
 
 | Effect | Description |
 |--------|-------------|
@@ -423,7 +405,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 | `motion_detect_blur` | Temporal motion blur |
 | `constant_blend_smooth` | 50/50 blend (baseline) |
 | `shutter_angle_smooth` | 180° camera shutter simulation |
-| `spline_interp_smooth` | Catmull‑Rom temporal reconstruction |
+| `spline_interp_smooth` | Cubic Hermite temporal reconstruction |
 | `variance_decay_smooth` | Variance‑gated IIR filter |
 | `dualrate_smooth` | Dual‑rate adaptive blend |
 | `luminance_gate_smooth` | Smooth dark areas more (scotopic vision) |
@@ -440,26 +422,10 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 | `dualwarp_flow_smooth` | Dual‑warp interpolation, inspired by FSR 3 frame generation |
 | `variance_flow_accumulate` | Motion‑compensated, triple‑gated, inspired by the research behind DLSS 2 |
 | `edge_reconstruct_smooth` | Edge‑directed reconstruction, inspired by XeSS DP4a path |
-| `surface_disocclusion_guard` | **Modifier:** history rejection, pair with any mode |
-| `convergent_detail_recovery` | **Modifier:** temporal sharpening, pair with any mode |
 </details>
 
 <details>
-<summary><b>11. Inline</b>, stackable (7)</summary>
-
-| Effect | Description |
-|--------|-------------|
-| `gaussian_grain` | Animated film grain (Box–Muller noise) |
-| `chromatic_aberration` | Lateral colour fringing |
-| `red_halation` | Red highlight bloom (film halation) |
-| `anamorphic_streak` | Horizontal blue lens streaks |
-| `radial_vignette` | Darkened edges |
-| `cinematic_letterbox` | 2.35:1 black bars |
-| `ordered_dither` | Bayer 4×4 ordered dithering |
-</details>
-
-<details>
-<summary><b>12. Exposure</b> (1)</summary>
+<summary><b>9. Exposure</b> (1)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -467,7 +433,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>13. Tonemapping</b>, pick one (8)</summary>
+<summary><b>10. Tonemapping</b>, pick one (8)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -482,7 +448,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>14. White balance</b>, pick one (3)</summary>
+<summary><b>11. White balance</b>, pick one (3)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -492,7 +458,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>15. Colour grading</b>, combinable (8)</summary>
+<summary><b>12. Colour grading</b>, combinable (8)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -507,7 +473,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>16. Channel curves</b>, combinable (3)</summary>
+<summary><b>13. Channel curves</b>, combinable (3)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -517,7 +483,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>17. Colour balance</b> (1)</summary>
+<summary><b>14. Colour balance</b> (1)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -525,7 +491,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>18. Selective colour</b>, combinable (3)</summary>
+<summary><b>15. Selective colour</b>, combinable (3)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -535,7 +501,7 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>19. Stylization</b>, mostly pick one (9)</summary>
+<summary><b>16. Stylization</b>, mostly pick one (9)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -551,16 +517,76 @@ Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multip
 </details>
 
 <details>
-<summary><b>20. Accessibility</b>, colour vision (6)</summary>
+<summary><b>17. Accessibility</b>, colour vision (6)</summary>
 
 | Effect | Description |
 |--------|-------------|
-| `protanopia_simulate` | Simulate red‑blind vision |
-| `deuteranopia_simulate` | Simulate green‑blind vision |
-| `tritanopia_simulate` | Simulate blue‑blind vision |
+| `protanopia_simulation` | Simulate red‑blind vision |
+| `deuteranopia_simulation` | Simulate green‑blind vision |
+| `tritanopia_simulation` | Simulate blue‑blind vision |
 | `protanopia_correct` | Daltonize for protanopia |
 | `deuteranopia_correct` | Daltonize for deuteranopia |
 | `tritanopia_correct` | Daltonize for tritanopia |
+</details>
+
+<details>
+<summary><b>18. Inline</b>, stackable (7)</summary>
+
+Lens and film effects applied after colour grading, before hardware simulation. These belong to the source image the virtual monitor receives.
+
+| Effect | Description |
+|--------|-------------|
+| `gaussian_grain` | Animated film grain (Box–Muller noise) |
+| `chromatic_aberration` | Lateral colour fringing |
+| `red_halation` | Red highlight bloom (film halation) |
+| `anamorphic_streak` | Horizontal blue lens streaks |
+| `radial_vignette` | Darkened edges |
+| `cinematic_letterbox` | 2.35:1 black bars |
+| `ordered_dither` | Bayer 4×4 ordered dithering |
+</details>
+
+<details>
+<summary><b>19. Hardware simulation</b>, one console + one display (17)</summary>
+
+Hardware sims act as the **display device** showing the finished image. AA and sharpen run before the sim so they see the ideal frame.
+
+**Console GPU simulation** (pick one):
+
+| Effect | Description |
+|--------|-------------|
+| `ps1_simulation` | PS1, UV grid quantization, nearest‑neighbour feel, 15‑bit colour with Bayer dither |
+| `saturn_simulation` | Saturn, luminance banding, dark desaturated palette, warm brown shift |
+| `n64_simulation` | N64, low‑res quantization softness, radial fog, warm shift |
+| `dreamcast_simulation` | Dreamcast, over‑bright response, boosted saturation, specular highlights |
+| `ps2_simulation` | PS2, pixel quantization, soft scanline modulation, threshold bloom |
+| `xbox_simulation` | Xbox, highlight boost, midtone lift bloom, plastic specular, warm/green bias |
+| `psp_simulation` | PSP, 480×272 phase, LCD washout gamma, dark banding, slight desaturation |
+| `ps3_simulation` | PS3, sub‑HD quantization, crushed shadows, cool shift |
+| `xbox360_simulation` | Xbox 360, eDRAM tile seams, HDR banding, lifted warm gamma, desat with specular boost |
+
+**Display simulation** (pick one, combinable with console sims):
+
+| Effect | Description |
+|--------|-------------|
+| `crt_simulation` | CRT, barrel warp + RGB phosphor mask + scanlines + brightness pulsing |
+| `phosphor_amber` | Amber monochrome CRT |
+| `phosphor_green` | Green monochrome CRT (classic terminal) |
+| `phosphor_red` | Red monochrome CRT |
+| `scanline_darken` | Scanlines only (no warp/mask) |
+| `oled_simulation` | Black crush + saturation boost |
+| `vhs_simulation` | VHS, horizontal ripple, per‑line tracking noise, luma noise, desaturation, warm shift, dropout |
+| `lcd_subpixel` | Visible RGB subpixel grid |
+</details>
+
+<details>
+<summary><b>20. Overlay (HUD)</b>, combinable (2)</summary>
+
+Overlays render after all processing (temporal, colour grading, accessibility, hardware sims) so they are never affected by other effects.
+
+| Effect | Description |
+|--------|-------------|
+| `fps_hud` | On‑screen FPS counter (7‑segment) |
+| `crosshair_overlay` | Centred neon crosshair |
 </details>
 
 ## Recommended Combinations:
@@ -574,11 +600,20 @@ BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/g
 # Cinematic, filmic tonemap, split tone, and layered inline effects
 BONES_CONFIG="hable_tonemap;split_tone;radial_vignette;cinematic_letterbox;gaussian_grain" bones -- ~/games/game
 
-# Retro CRT
-BONES_CONFIG="crt_simulation" bones -- ~/games/game
+# PS1 on a CRT
+BONES_CONFIG="ps1_simulation;crt_simulation" bones -- ~/games/game
 
-# Anti‑flicker temporal stability (edge‑aware + disocclusion guard)
-BONES_CONFIG="gradient_gate_smooth;surface_disocclusion_guard" bones -- ~/games/game
+# N64 on a CRT
+BONES_CONFIG="n64_simulation;crt_simulation" bones -- ~/games/game
+
+# PSP handheld look
+BONES_CONFIG="psp_simulation;lcd_subpixel" bones -- ~/games/game
+
+# Anti‑flicker temporal stability (stabilizer activates automatically)
+BONES_CONFIG="gradient_gate_smooth" bones -- ~/games/game
+
+# VHS found footage
+BONES_CONFIG="vhs_simulation" bones -- ~/games/game
 
 # Colourblind correction (deuteranopia)
 BONES_CONFIG="deuteranopia_correct" bones -- ~/games/game
@@ -597,7 +632,8 @@ Limitations:
 - No custom shaders or LUTs.
 - No multi‑pass effects (e.g. advanced bloom with downsample chains).
 - Per‑object motion vectors (as in true DLSS) are approximated by optical flow from neighbouring pixels.
-- Fast motion can cause ghosting on some temporal modes; use `surface_disocclusion_guard` to reduce it.
+- Fast motion can cause ghosting on some temporal modes; the automatic `convergent_detail_recovery` stabilizer includes a motion gate that softens history influence on large per‑pixel changes to reduce it.
+- Combining a temporal mode with a hardware sim makes the history texture capture the post‑sim image, which the next frame reads back through TAA; the result is stable but visually unusual.
 - OpenGL contexts below 3.0 without `GL_ARB_vertex_array_object` have post‑FX disabled for that context; the application still runs.
 
 The effect order is fixed and cannot be changed at runtime.
@@ -606,4 +642,4 @@ The effect order is fixed and cannot be changed at runtime.
 
 Heavily inspired by existing reshade tools, but the ubershader implementation and the majority of the effect code were written from scratch (or ported from GLSL snippets in public‑domain and open‑source shader repositories).
 
-All 118 effect implementations are original or derived from well‑known algorithms (FXAA by Timothy Lottes, CAS/RCAS from AMD GPUOpen, AgX, ACES, and others) under their respective licenses (mostly MIT/BSD). The project itself is released under the **GNU General Public License v3.0**, full text in [LICENSE](LICENSE).
+All 125 effect implementations are original or derived from well‑known algorithms (FXAA by Timothy Lottes, CAS/RCAS from AMD GPUOpen, AgX, ACES, and others) under their respective licenses (mostly MIT/BSD). The project itself is released under the **GNU General Public License v3.0**, full text in [LICENSE](LICENSE).

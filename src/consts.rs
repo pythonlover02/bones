@@ -48,14 +48,20 @@ pub(crate) const DLSYM_VERSION: &[u8] = b"GLIBC_2.17\0";
 pub(crate) const USAGE: &str = "usage: bones [PROFILE] -- COMMAND [ARGS...]\n  bones -- CMD            run CMD with the default profile (~/.config/bones/bones-config.toml)\n  bones NAME -- CMD       run CMD with profile ~/.config/bones/NAME-config.toml\n";
 
 pub(crate) const HEAD: &str = r#"##bones default profile
-# effect process in the order listed to ubershader pipeline: UV to Spatial to Temporal to Inline to Color
-# pick ONE anti aliasing ONE tonemapper and ONE primary temporal smoother for best result
+# effects process in this order: geometric warps -> master fetch -> shared
+# neighborhood taps -> spatial/blur/temporal -> color grade and tonemap ->
+# inline lens/film -> hardware sim color half -> HUD overlay.
+# pick ONE anti aliasing ONE tonemapper and ONE primary temporal smoother for
+# best result, but the source never rejects stacked effects: stack whatever
+# look you find good.
 
 [general]
 hot_reload = true
 
 [geometric]
-# warp texture coordinate before any pixel be sampled
+# warp texture coordinate before any pixel be sampled. all warps here are
+# deterministic (no time, no random) so temporal history align frame to
+# frame across resolution.
 
 identity = false
 
@@ -135,8 +141,9 @@ normal_filter_aa = false
 
 # morphological_aa to conservative morphological AA inspired by Intel
 #   CMAA technique. blend cardinal and diagonal neighbor weighted by
-#   edge magnitude with a soft threshold. more conservative than FXAA to
-#   preserve more detail but catch fewer edge.
+#   absolute edge magnitude (sum of per channel difference) with a soft
+#   threshold. more conservative than FXAA to preserve more detail but
+#   catch fewer edge.
 morphological_aa = false
 
 # subpixel_aa to subpixel morphological AA inspired by SMAA (Enhanced
@@ -201,7 +208,7 @@ midtone_clarity = false
 #   to laplacian_sharpen while being more aggressive on fine detail.
 falloff_sharpen = false
 
-# power_curve_sharpen to filmic sharpen using a power curve response
+# power_curve_sharpen to filmic sharpen using a rational response curve
 #   instead of linear scaling. small difference get boosted more than
 #   large difference producing a softer more cinematic look than
 #   linear sharpener. good for story driven game where you want
@@ -232,15 +239,18 @@ local_contrast = false
 #   every image editor just at a small fixed kernel size.
 gaussian_blur = false
 
-# box_blur to uniform 5x5 box blur with resolution scaled radius. every
-#   pixel in the 5x5 neighborhood contribute equally. more aggressive
-#   and cheaper than gaussian_blur but produce a slightly blockier result.
+# box_blur to large radius box blur via Kawase dual filter pattern. four
+#   bilinear paired sample at half pixel offset exploit GPU bilinear
+#   filtering to cover a wide neighborhood at minimum fetch cost. produce
+#   the same broad uniform blur as a multi tap box kernel for a fraction
+#   of the bandwidth.
 box_blur = false
 
-# bokeh_blur to circular 8 sample ring blur simulating shallow depth of
-#   field (the blurry background you get with a wide aperture camera lens).
-#   bright spot get extra weight to simulate the characteristic "bokeh
-#   circle" of out of focus highlight.
+# bokeh_blur to circular ring blur simulating shallow depth of field (the
+#   blurry background you get with a wide aperture camera lens). four
+#   bilinear paired sample around the unit circle with brightness
+#   weighting reproduce the characteristic "bokeh circle" of out of focus
+#   highlight at lower fetch cost than naive ring sampling.
 bokeh_blur = false
 
 # tilt_shift_blur to miniature/diorama effect. a sharp horizontal band
@@ -275,72 +285,16 @@ threshold_bloom = false
 #   at a bright light. similar to the lens flare effect in JJ Abrams film.
 ghost_flare = false
 
-[display_simulation]
-# simulate various display hardware characteristic. useful for retro
-# gaming aesthetic or matching specific display look.
-
-# crt_simulation to full CRT television simulation: barrel warp distortion
-#   RGB phosphor triad mask (the three colored dot that make up each CRT
-#   pixel) horizontal scanline darkening and brightness compensation.
-#   make modern game look like they run on a 90s TV.
-crt_simulation = false
-
-# phosphor_amber to monochrome amber phosphor CRT. the warm orange white
-#   look of 1980s IBM PC monitor and airport departure board.
-phosphor_amber = false
-
-# phosphor_green to monochrome green phosphor CRT. the classic "hacker
-#   terminal" look from 1970s 80s computer (Apple II VT100).
-phosphor_green = false
-
-# phosphor_red to monochrome red phosphor CRT. less common historically
-#   but used in some military and medical display.
-phosphor_red = false
-
-# scanline_darken to horizontal scanline darkening only without the barrel
-#   warp and phosphor mask of crt_simulation. add the characteristic
-#   "lined" look of a CRT without the geometric distortion.
-scanline_darken = false
-
-# oled_simulation to simulate OLED display characteristic: near black
-#   crush (dark gray fade toward black via smoothstep) plus saturation
-#   boost. make the image look like it displayed on a high end OLED TV.
-oled_simulation = false
-
-# vhs_simulation to VHS videotape degradation: per scanline horizontal
-#   jitter (tracking error) chroma channel separation (color bleed)
-#   luma noise (static) and vertical ripple distortion. all distance
-#   be resolution scaled. great for horror game or retro aesthetic.
-vhs_simulation = false
-
-# lcd_subpixel to visible LCD subpixel grid overlay. show the RGB
-#   subpixel structure you would see examining an LCD screen with a magnifying
-#   glass. cell size scale with resolution so it look correct at any
-#   display resolution.
-lcd_subpixel = false
-
-[overlay]
-# HUD element drawn on top of the processed image.
-
-# fps_hud to performance overlay showing FPS as a uniquely
-#   colored 7 segment display. Just measures FPS.
-fps_hud = false
-
-# crosshair_overlay to centered crosshair with gap arm and center dot
-#   all resolution scaled. styled with a neon blue core and glow to
-#   match the fps hud. useful for game that lack a built in crosshair
-#   or when you want a consistent crosshair across different game.
-crosshair_overlay = false
-
 [temporal]
 # blend current frame with previous frame to reduce flicker noise and judder.
-# this be bones signature feature to 24 temporal processing mode from simple
+# this be bones signature feature to 22 temporal processing mode from simple
 # blending to motion compensated accumulation inspired by the research behind
 # DLSS FSR and XeSS.
 #
-# pick ONE primary mode. stacking multiple temporal effect cause compounding
-# ghosting. you CAN pair any primary mode with surface_disocclusion_guard
-# (reduce ghosting) and/or convergent_detail_recovery (add sharpness back).
+# pick ONE primary mode for best result. stacking multiple temporal effect
+# cause compounding ghosting which may or may not be the look you want.
+# the convergent_detail_recovery stabilizer activate automatically
+# whenever any temporal mode be enabled. you get it for free.
 #
 # ordered from simplest to most sophisticated:
 
@@ -370,18 +324,20 @@ motion_detect_blur = false
 #   against more sophisticated mode.
 constant_blend_smooth = false
 
-# shutter_angle_smooth to physical camera shutter simulation. a 180°
-#   shutter angle mean the film/sensor be exposed for half the frame
-#   duration naturally integrating two exposure. this be how real
-#   cinema camera work and why 24fps film look smoother than 24fps
-#   game to the motion blur be baked into each frame. produce the
-#   most cinematically "correct" temporal blending.
+# shutter_angle_smooth to physical 180° shutter simulation. weight the
+#   history contribution by motion magnitude so still pixel integrate
+#   over the full half frame exposure while moving pixel get progressive
+#   shorter virtual exposure. produce the cinematic motion blur of real
+#   24fps film camera where stillness be fully integrated and motion
+#   smear be partial. different from constant_blend_smooth which apply
+#   afixed 50/50 blend regardless of motion.
 shutter_angle_smooth = false
 
-# spline_interp_smooth to Catmull Rom spline reconstruction between the
-#   previous and current frame. unlike linear blending the spline curve
-#   can overshoot slightly producing a sharper temporal response. the
-#   Catmull Rom spline be the standard interpolation curve used in
+# spline_interp_smooth to cubic Hermite reconstruction between the previous
+#   and current frame with extrapolated control point. the Hermite
+#   formulation overshoot slightly past linear blending producing a sharper
+#   temporal response on detail recovery than the constant blend equivalent.
+#   related to the Catmull Rom family of cubic interpolant used in
 #   animation software and video editing.
 spline_interp_smooth = false
 
@@ -429,12 +385,12 @@ gradient_gate_smooth = false
 #   min/max clamping because sigma adapt to local noise level.
 sigma_clip_smooth = false
 
-# mitchell_kernel_smooth to Mitchell Netravali spatial reconstruction
-#   kernel blended with temporal history. the Mitchell Netravali filter
-#   (1988) be a cubic reconstruction filter used in high quality image
-#   resampling (Pixar RenderMan Blender etc). the B parameter trade
-#   sharpness for ringing. this combine that spatial quality with
-#   temporal accumulation.
+# mitchell_kernel_smooth to Mitchell Netravali piecewise cubic spatial
+#   reconstruction (Mitchell & Netravali 1988) with B=1/3 C=1/3 the
+#   standard "balanced" tradeoff between sharpness and ringing used in
+#   Pixar RenderMan Blender and ImageMagick high quality resampling.
+#   apply the cubic kernel to the 3x3 neighborhood for spatial
+#   reconstruction then blend the result with temporal history.
 mitchell_kernel_smooth = false
 
 # ycocg_clip_smooth to YCoCg neighborhood AABB clamp with confidence
@@ -502,9 +458,10 @@ convergent_accumulate = false
 #   frame backward and the history frame forward by half the motion
 #   vector toward a temporal midpoint to this halve the warp error
 #   compared to single direction warping. perform a forward backward
-#   consistency check (estimate flow A to B then B to A; if they do not cancel
-#   the flow be unreliable). clamp warped history to the cardinal
-#   neighborhood AABB. fall back to the current frame on disocclusion.
+#   consistency check using gradient resampled at the warped location
+#   (estimate flow A to B then B to A; if they do not cancel the flow
+#   be unreliable). clamp warped history to the cardinal neighborhood
+#   AABB. fall back to the current frame on disocclusion.
 dualwarp_flow_smooth = false
 
 # variance_flow_accumulate to motion compensated temporal accumulation
@@ -533,76 +490,6 @@ variance_flow_accumulate = false
 #   the neighborhood AABB and blend with edge aware confidence.
 #   no other temporal mode do directional spatial reconstruction.
 edge_reconstruct_smooth = false
-
-# surface_disocclusion_guard to history rejection for newly revealed
-#   surface. when the camera move or an object move previously hidden
-#   pixel become visible. the history for those pixel be from a
-#   completely different surface so blending with it create ghosting.
-#   this detect the situation by thresholding the per pixel difference
-#   between current and history and fall back to the current frame when
-#   exceeded. pair with ANY temporal mode to reduce ghosting. the same
-#   concept as the disocclusion handling in FSR 2 and DLSS 2.
-surface_disocclusion_guard = false
-
-# convergent_detail_recovery to temporal sharpening. the opposite of
-#   smoothing: use converged history to ENHANCE detail in stable area.
-#   when the history have accumulated over several stable frame it
-#   contain more detail than any single frame (from sub pixel
-#   accumulation). this pull the current frame toward that converged
-#   representation effectively sharpening using temporal information.
-#   motion rejected so it only activate in stable area. unique to
-#   bones to no other reshade style tool do temporal sharpening.
-convergent_detail_recovery = false
-
-[inline]
-# per pixel effect that sample raw input or operate on the processed
-# color directly. run after temporal before color grading.
-
-# gaussian_grain to film grain using the Box Muller transform to generate
-#   true Gaussian distributed noise from two uniform pseudorandom input.
-#   animated via u_time so the grain pattern change every frame like
-#   real film grain. the Box Muller method be the standard way to generate
-#   Gaussian noise in shader and scientific computing.
-gaussian_grain = false
-
-# chromatic_aberration to lateral chromatic aberration. shift the red
-#   channel outward from center and the blue channel inward (or vice
-#   versa) simulating the color fringing of a cheap camera lens that
-#   cannot focus all wavelength to the same point. subtle amount add
-#   realism; strong amount create a stylized look.
-chromatic_aberration = false
-
-# red_halation to halation glow. in real film bright highlight scatter
-#   light through the film base and re expose the emulsion from behind
-#   creating a red glow around bright object. this sample bright
-#   neighbor and add their excess brightness to the red channel only.
-#   distinctive warm glow that digital rendering lack.
-red_halation = false
-
-# anamorphic_streak to horizontal streak flare from bright highlight.
-#   simulate the horizontal lens flare streak produced by anamorphic
-#   (widescreen) cinema lens. 6 tap bilateral horizontal sampling with
-#   brightness threshold tinted blue to match real anamorphic coating.
-#   all distance resolution scaled.
-anamorphic_streak = false
-
-# radial_vignette to darkened edge with smoothstep falloff from inner
-#   to outer radius. simulate the natural light falloff at the edge of
-#   a camera lens. standard cinematic technique to draw the eye toward
-#   the center of the frame.
-radial_vignette = false
-
-# cinematic_letterbox to black bar for 2.35:1 widescreen aspect ratio.
-#   the same aspect ratio used by most Hollywood blockbuster (called
-#   "Scope" or "CinemaScope"). add black bar top and bottom to crop
-#   a 16:9 image to the wider cinematic ratio.
-cinematic_letterbox = false
-
-# ordered_dither to Bayer 4x4 ordered dithering (Bayer 1973). add a
-#   spatially structured noise pattern that break up visible color
-#   banding in gradient. the same technique used in GIF image and
-#   retro game console hardware.
-ordered_dither = false
 
 [exposure]
 # linear_exposure to fixed 1.3x exposure multiplier applied before
@@ -708,6 +595,8 @@ vibrance_boost = false
 
 # hsl_transform to a mild saturation boost (1.1x) in HSL color space,
 #   in the spirit of the Photoshop Hue/Saturation dialog. on/off only.
+#   note: do not enable alongside red/green/blue_channel_curve or
+#   hermite_curves as the curve double apply on shared channel.
 hsl_transform = false
 
 # split_tone to tint shadow cool (blue) and highlight warm (amber)
@@ -724,11 +613,15 @@ lift_gamma_gain = false
 # hermite_curves to s curve contrast via Hermite smoothstep (3t² to 2t³)
 #   applied to all channel. the same smooth s curve used in CSS
 #   transition and shader easing function. increase contrast in
-#   midtone while compressing highlight and shadow.
+#   midtone while compressing highlight and shadow. note: enabling
+#   alongside any of red/green/blue_channel_curve will double apply
+#   on that channel.
 hermite_curves = false
 
 [channel_curves]
-# per channel s curve for fine color control
+# per channel s curve for fine color control. note: each channel curve
+# stack with hermite_curves on the same channel; enable only one of the
+# two for predictable result.
 
 # red_channel_curve to Hermite s curve applied to red channel only
 red_channel_curve = false
@@ -816,18 +709,18 @@ luminance_grayscale = false
 [accessibility]
 # color vision simulation and correction tool
 
-# protanopia_simulate to simulate protanopia (red blind) vision using
+# protanopia_simulation to simulate protanopia (red blind) vision using
 #   a 3x3 color transformation matrix. show what the image look like
 #   to someone with red cone deficiency (~1% of male).
-protanopia_simulate = false
+protanopia_simulation = false
 
-# deuteranopia_simulate to simulate deuteranopia (green blind) vision.
+# deuteranopia_simulation to simulate deuteranopia (green blind) vision.
 #   the most common color vision deficiency (~6% of male).
-deuteranopia_simulate = false
+deuteranopia_simulation = false
 
-# tritanopia_simulate to simulate tritanopia (blue blind) vision.
+# tritanopia_simulation to simulate tritanopia (blue blind) vision.
 #   rare (~0.01% of population).
-tritanopia_simulate = false
+tritanopia_simulation = false
 
 # protanopia_correct to Daltonization for protanopia. redistribute the
 #   color information lost by red cone deficiency to the green and blue
@@ -843,13 +736,187 @@ deuteranopia_correct = false
 # tritanopia_correct to Daltonization for tritanopia. redistribute lost
 #   blue channel information to red and green channel.
 tritanopia_correct = false
+
+[inline]
+# per pixel lens/film effect applied after color grading before hardware
+# simulation. these belong to the "source image" the virtual monitor receive.
+
+# gaussian_grain to film grain using the Box Muller transform to generate
+#   Gaussian distributed noise. animated via u_time so the grain pattern
+#   change every frame like real film grain. the Box Muller method be the
+#   standard way to generate Gaussian noise in shader and scientific
+#   computing.
+gaussian_grain = false
+
+# chromatic_aberration to lateral chromatic aberration. shift the red
+#   channel outward from center and the blue channel inward (or vice
+#   versa) simulating the color fringing of a cheap camera lens that
+#   cannot focus all wavelength to the same point. happen at master
+#   fetch so it form the base image before any neighborhood operation.
+chromatic_aberration = false
+
+# red_halation to halation glow. in real film bright highlight scatter
+#   light through the film base and re expose the emulsion from behind
+#   creating a red glow around bright object. derived from shared corner
+#   tap so it dedupe with any other 3x3 consumer enabled.
+red_halation = false
+
+# anamorphic_streak to horizontal streak flare from bright highlight.
+#   simulate the horizontal lens flare streak produced by anamorphic
+#   (widescreen) cinema lens. six bilinear paired horizontal sample
+#   with brightness threshold tinted blue to match real anamorphic
+#   coating. all distance resolution scaled.
+anamorphic_streak = false
+
+# radial_vignette to darkened edge with smoothstep falloff from inner
+#   to outer radius. simulate the natural light falloff at the edge of
+#   a camera lens. standard cinematic technique to draw the eye toward
+#   the center of the frame.
+radial_vignette = false
+
+# cinematic_letterbox to black bar for 2.35:1 widescreen aspect ratio.
+#   the same aspect ratio used by most Hollywood blockbuster (called
+#   "Scope" or "CinemaScope"). add black bar top and bottom to crop
+#   a 16:9 image to the wider cinematic ratio.
+cinematic_letterbox = false
+
+# ordered_dither to Bayer 4x4 ordered dithering (Bayer 1973). add a
+#   spatially structured noise pattern that break up visible color
+#   banding in gradient. the same technique used in GIF image and
+#   retro game console hardware.
+ordered_dither = false
+
+[hardware_simulation]
+# simulate specific hardware rendering and display characteristic.
+# split across two phase: deterministic UV warp run in the geometric
+# stage (alongside fisheye and barrel) so temporal stay aligned, and
+# color/mask/quantize run at the end so they act as the "monitor"
+# showing the finished image. AA sharpen and color grade see the ideal
+# frame not the CRT distorted one.
+#
+# pick ONE console GPU simulation for best result. stacking multiple be
+# undefined but never rejected. pair one console with one display sim
+# for the full experience: ps1_simulation + crt_simulation = 90s living
+# room. psp_simulation + lcd_subpixel = handheld screen.
+# n64_simulation + crt_simulation = childhood.
+
+# ps1_simulation to PlayStation 1 GPU simulation. vertex snap via
+#   coarse grid quantization simulate the GTE fixed point integer
+#   coordinate quantization. nearest neighbor snap remove bilinear
+#   filtering. 15 bit color (5 bit per channel 32 level) with Bayer
+#   4x4 ordered dither.
+ps1_simulation = false
+
+# saturn_simulation to Sega Saturn GPU simulation. coarse pixel
+#   quantization plus smoothing pass approximate the gouraud shading
+#   interpolation banding across polygon face. dark desaturated color
+#   palette with warm brown shift. 15 bit color with dither.
+saturn_simulation = false
+
+# n64_simulation to Nintendo 64 GPU simulation. unique 3 point bilinear
+#   filter create the characteristic vaseline smear look. radial
+#   distance fog darken screen edge. warm color shift. the opposite
+#   of PS1: where PS1 be sharp and jittery N64 be soft and smeared.
+n64_simulation = false
+
+# dreamcast_simulation to Sega Dreamcast GPU simulation. visible texture
+#   shimmer from edge weighting. over bright color response and boosted
+#   saturation. visible polygon edge darkening. subtle specular boost
+#   on bright area.
+dreamcast_simulation = false
+
+# ps2_simulation to PlayStation 2 GPU simulation. 480i interlace combing
+#   on alternating field. horizontal chroma bleed from the GS color
+#   path. soft bloom on bright surface. subtle scanline darkening.
+ps2_simulation = false
+
+# xbox_simulation to original Xbox GPU simulation. DXT S3TC texture
+#   compression 4x4 pixel block artifact. heavy sharpening with
+#   ringing overshoot. crude large radius bloom. plastic specular
+#   boost. slight green warm color bias.
+xbox_simulation = false
+
+# psp_simulation to PlayStation Portable GPU simulation. UV phase quantize
+#   to 480x272 native resolution. LCD gamma washout with black floor at
+#   6 percent and white ceiling at 92 percent. dark region color banding.
+#   slight desaturation. run independent of the temporal stabilizer.
+psp_simulation = false
+
+# ps3_simulation to PlayStation 3 GPU simulation. sub HD rendering around
+#   72 percent native upscaled with bilinear filtering. quincunx anti
+#   aliasing half pixel diagonal blend. crushed shadow from RSX gamma.
+#   cool color shift. tear line removed (time varying so it broke the
+#   phase rule); the rest of the PS3 look land intact.
+ps3_simulation = false
+
+# xbox360_simulation to Xbox 360 GPU simulation. sharp 4xMSAA edge cleanup
+#   from free eDRAM anti aliasing. eDRAM tiling seam at one third and
+#   two third screen height. HDR gradient banding in bright region.
+#   lifted warm gamma. slight desaturation with specular peak boost.
+xbox360_simulation = false
+
+# crt_simulation to CRT television simulation. barrel warp distortion
+#   in the geometric stage, RGB phosphor triad mask scanline darkening
+#   and brightness compensation in the color stage. brightness pulsing
+#   replace the old random instability so temporal history stay aligned.
+crt_simulation = false
+
+# phosphor_amber to monochrome amber phosphor CRT. the warm orange white
+#   look of 1980s IBM PC monitor and airport departure board.
+phosphor_amber = false
+
+# phosphor_green to monochrome green phosphor CRT. the classic "hacker
+#   terminal" look from 1970s 80s computer (Apple II VT100).
+phosphor_green = false
+
+# phosphor_red to monochrome red phosphor CRT. less common historically
+#   but used in some military and medical display.
+phosphor_red = false
+
+# scanline_darken to horizontal scanline darkening only without the barrel
+#   warp and phosphor mask of crt_simulation. add the characteristic
+#   "lined" look of a CRT without the geometric distortion.
+scanline_darken = false
+
+# oled_simulation to simulate OLED display characteristic: near black
+#   crush (dark gray fade toward black via smoothstep) plus saturation
+#   boost. make the image look like it displayed on a high end OLED TV.
+oled_simulation = false
+
+# vhs_simulation to VHS videotape degradation. deterministic horizontal
+#   ripple in the geometric stage. chroma bandwidth reduction luma noise
+#   color desaturation warm shift and dropout in the color stage. the
+#   ripple amplitude be fixed per line so temporal stay coherent.
+vhs_simulation = false
+
+# lcd_subpixel to visible LCD subpixel grid overlay. show the RGB
+#   subpixel structure you would see examining an LCD screen with a magnifying
+#   glass. cell size scale with resolution so it look correct at any
+#   display resolution.
+lcd_subpixel = false
+
+[overlay]
+# HUD element drawn on top of the processed image. overlay render
+# after all processing so they be not affected by temporal blending
+# tonemapping color grading or any other effect. your crosshair
+# stay the same color and your FPS counter do not ghost.
+
+# fps_hud to performance overlay showing FPS as a uniquely
+#   colored 7 segment display. Just measures FPS.
+fps_hud = false
+
+# crosshair_overlay to centered crosshair with gap arm and center dot
+#   all resolution scaled. styled with a neon blue core and glow to
+#   match the fps hud. useful for game that lack a built in crosshair
+#   or when you want a consistent crosshair across different game.
+crosshair_overlay = false
 "#;
 
 pub(crate) struct EffectDef {
     pub(crate) name: &'static str,
 }
 
-pub(crate) const REGISTRY: [EffectDef; 118] = [
+pub(crate) const REGISTRY: [EffectDef; 125] = [
     EffectDef { name: "identity" },
     EffectDef { name: "mirror_horizontal" },
     EffectDef { name: "mirror_vertical" },
@@ -885,16 +952,6 @@ pub(crate) const REGISTRY: [EffectDef; 118] = [
     EffectDef { name: "gradient_deband" },
     EffectDef { name: "threshold_bloom" },
     EffectDef { name: "ghost_flare" },
-    EffectDef { name: "crt_simulation" },
-    EffectDef { name: "phosphor_amber" },
-    EffectDef { name: "phosphor_green" },
-    EffectDef { name: "phosphor_red" },
-    EffectDef { name: "scanline_darken" },
-    EffectDef { name: "oled_simulation" },
-    EffectDef { name: "vhs_simulation" },
-    EffectDef { name: "lcd_subpixel" },
-    EffectDef { name: "fps_hud" },
-    EffectDef { name: "crosshair_overlay" },
     EffectDef { name: "neighborhood_clamp_aa" },
     EffectDef { name: "motion_reject_denoise" },
     EffectDef { name: "motion_detect_blur" },
@@ -917,15 +974,6 @@ pub(crate) const REGISTRY: [EffectDef; 118] = [
     EffectDef { name: "dualwarp_flow_smooth" },
     EffectDef { name: "variance_flow_accumulate" },
     EffectDef { name: "edge_reconstruct_smooth" },
-    EffectDef { name: "surface_disocclusion_guard" },
-    EffectDef { name: "convergent_detail_recovery" },
-    EffectDef { name: "gaussian_grain" },
-    EffectDef { name: "chromatic_aberration" },
-    EffectDef { name: "red_halation" },
-    EffectDef { name: "anamorphic_streak" },
-    EffectDef { name: "radial_vignette" },
-    EffectDef { name: "cinematic_letterbox" },
-    EffectDef { name: "ordered_dither" },
     EffectDef { name: "linear_exposure" },
     EffectDef { name: "aces_tonemap" },
     EffectDef { name: "agx_tonemap" },
@@ -962,12 +1010,38 @@ pub(crate) const REGISTRY: [EffectDef; 118] = [
     EffectDef { name: "midpoint_contrast" },
     EffectDef { name: "color_invert" },
     EffectDef { name: "luminance_grayscale" },
-    EffectDef { name: "protanopia_simulate" },
-    EffectDef { name: "deuteranopia_simulate" },
-    EffectDef { name: "tritanopia_simulate" },
+    EffectDef { name: "protanopia_simulation" },
+    EffectDef { name: "deuteranopia_simulation" },
+    EffectDef { name: "tritanopia_simulation" },
     EffectDef { name: "protanopia_correct" },
     EffectDef { name: "deuteranopia_correct" },
     EffectDef { name: "tritanopia_correct" },
+    EffectDef { name: "gaussian_grain" },
+    EffectDef { name: "chromatic_aberration" },
+    EffectDef { name: "red_halation" },
+    EffectDef { name: "anamorphic_streak" },
+    EffectDef { name: "radial_vignette" },
+    EffectDef { name: "cinematic_letterbox" },
+    EffectDef { name: "ordered_dither" },
+    EffectDef { name: "ps1_simulation" },
+    EffectDef { name: "saturn_simulation" },
+    EffectDef { name: "n64_simulation" },
+    EffectDef { name: "dreamcast_simulation" },
+    EffectDef { name: "ps2_simulation" },
+    EffectDef { name: "xbox_simulation" },
+    EffectDef { name: "psp_simulation" },
+    EffectDef { name: "ps3_simulation" },
+    EffectDef { name: "xbox360_simulation" },
+    EffectDef { name: "crt_simulation" },
+    EffectDef { name: "phosphor_amber" },
+    EffectDef { name: "phosphor_green" },
+    EffectDef { name: "phosphor_red" },
+    EffectDef { name: "scanline_darken" },
+    EffectDef { name: "oled_simulation" },
+    EffectDef { name: "vhs_simulation" },
+    EffectDef { name: "lcd_subpixel" },
+    EffectDef { name: "fps_hud" },
+    EffectDef { name: "crosshair_overlay" },
 ];
 
 pub(crate) const TRI_VERTS: [f32; 6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
@@ -1077,105 +1151,124 @@ out vec4 frag_out;
 
 const vec3 LUMA_BT601 = vec3(0.299, 0.587, 0.114);
 const vec3 LUMA_BT709 = vec3(0.2126, 0.7152, 0.0722);
+const vec3 LUMA_AVG = vec3(0.3333333333);
+const vec3 ONE3 = vec3(1.0);
+const vec2 HALF2 = vec2(0.5);
+const vec3 HALF3 = vec3(0.5);
+const vec3 ZERO3 = vec3(0.0);
 
-#ifdef ENABLE_CRT_SIMULATION
-    vec3 crt_fetch_px(vec2 uv) {
-        return texture(u_input, uv).rgb;
+#if defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_MOTION_REJECT_DENOISE) || defined(ENABLE_MOTION_DETECT_BLUR) || defined(ENABLE_CONSTANT_BLEND_SMOOTH) || defined(ENABLE_SHUTTER_ANGLE_SMOOTH) || defined(ENABLE_SPLINE_INTERP_SMOOTH) || defined(ENABLE_VARIANCE_DECAY_SMOOTH) || defined(ENABLE_DUALRATE_SMOOTH) || defined(ENABLE_LUMINANCE_GATE_SMOOTH) || defined(ENABLE_CONTRAST_GATE_SMOOTH) || defined(ENABLE_GRADIENT_GATE_SMOOTH) || defined(ENABLE_SIGMA_CLIP_SMOOTH) || defined(ENABLE_MITCHELL_KERNEL_SMOOTH) || defined(ENABLE_YCOCG_CLIP_SMOOTH) || defined(ENABLE_BILATERAL_HISTORY_SMOOTH) || defined(ENABLE_PERCEPTUAL_CHROMA_SMOOTH) || defined(ENABLE_FREQUENCY_SPLIT_SMOOTH) || defined(ENABLE_HORN_SCHUNCK_SMOOTH) || defined(ENABLE_CONVERGENT_ACCUMULATE) || defined(ENABLE_DUALWARP_FLOW_SMOOTH) || defined(ENABLE_VARIANCE_FLOW_ACCUMULATE) || defined(ENABLE_EDGE_RECONSTRUCT_SMOOTH)
+    #define ROLE_HISTORY
+    #define ENABLE_TEMPORAL_STABILIZER
+#endif
+
+#if defined(ENABLE_HORN_SCHUNCK_SMOOTH) || defined(ENABLE_DUALWARP_FLOW_SMOOTH) || defined(ENABLE_VARIANCE_FLOW_ACCUMULATE) || defined(ENABLE_EDGE_RECONSTRUCT_SMOOTH)
+    #define ROLE_HISTORY_FLOW
+#endif
+
+#if defined(ENABLE_LUMA_EDGE_AA) || defined(ENABLE_NORMAL_FILTER_AA) || defined(ENABLE_MORPHOLOGICAL_AA) || defined(ENABLE_SUBPIXEL_AA) || defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_ROBUST_CONTRAST_SHARPEN) || defined(ENABLE_EDGE_DIRECTED_SHARPEN) || defined(ENABLE_LAPLACIAN_SHARPEN) || defined(ENABLE_LUMINANCE_SHARPEN) || defined(ENABLE_MIDTONE_CLARITY) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_POWER_CURVE_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_LOCAL_CONTRAST) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_THRESHOLD_BLOOM) || defined(ENABLE_RED_HALATION) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_SIGMA_CLIP_SMOOTH) || defined(ENABLE_DUALRATE_SMOOTH) || defined(ENABLE_HORN_SCHUNCK_SMOOTH) || defined(ENABLE_FREQUENCY_SPLIT_SMOOTH) || defined(ENABLE_GRADIENT_GATE_SMOOTH) || defined(ENABLE_BILATERAL_HISTORY_SMOOTH) || defined(ENABLE_CONTRAST_GATE_SMOOTH) || defined(ENABLE_DUALWARP_FLOW_SMOOTH) || defined(ENABLE_VARIANCE_FLOW_ACCUMULATE) || defined(ENABLE_EDGE_RECONSTRUCT_SMOOTH) || defined(ENABLE_YCOCG_CLIP_SMOOTH) || defined(ENABLE_MITCHELL_KERNEL_SMOOTH) || defined(ENABLE_BILATERAL_DENOISE)
+    #define ROLE_TAPS_CROSS
+#endif
+
+#if defined(ENABLE_LUMA_EDGE_AA) || defined(ENABLE_MORPHOLOGICAL_AA) || defined(ENABLE_SUBPIXEL_AA) || defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_THRESHOLD_BLOOM) || defined(ENABLE_RED_HALATION) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_SIGMA_CLIP_SMOOTH) || defined(ENABLE_MITCHELL_KERNEL_SMOOTH) || defined(ENABLE_BILATERAL_DENOISE)
+    #define ROLE_TAPS_CORNER
+#endif
+
+#if defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_ROBUST_CONTRAST_SHARPEN) || defined(ENABLE_EDGE_DIRECTED_SHARPEN) || defined(ENABLE_LAPLACIAN_SHARPEN) || defined(ENABLE_LUMINANCE_SHARPEN) || defined(ENABLE_MIDTONE_CLARITY) || defined(ENABLE_POWER_CURVE_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_LOCAL_CONTRAST) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_DUALRATE_SMOOTH) || defined(ENABLE_SIGMA_CLIP_SMOOTH) || defined(ENABLE_FREQUENCY_SPLIT_SMOOTH) || defined(ENABLE_VARIANCE_FLOW_ACCUMULATE) || defined(ENABLE_CONTRAST_GATE_SMOOTH) || defined(ENABLE_BILATERAL_HISTORY_SMOOTH) || defined(ENABLE_MITCHELL_KERNEL_SMOOTH)
+    #define ROLE_SUM_CROSS
+#endif
+
+#if defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_SIGMA_CLIP_SMOOTH) || defined(ENABLE_MITCHELL_KERNEL_SMOOTH)
+    #define ROLE_SUM_CORNER
+#endif
+
+#if defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_ROBUST_CONTRAST_SHARPEN) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_DUALWARP_FLOW_SMOOTH) || defined(ENABLE_EDGE_RECONSTRUCT_SMOOTH) || defined(ENABLE_YCOCG_CLIP_SMOOTH)
+    #define ROLE_BOUNDS_CROSS
+#endif
+
+#if defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA)
+    #define ROLE_BOUNDS_3X3
+#endif
+
+#if defined(ENABLE_EDGE_DIRECTED_SHARPEN) || defined(ENABLE_NORMAL_FILTER_AA) || defined(ENABLE_HORN_SCHUNCK_SMOOTH) || defined(ENABLE_DUALWARP_FLOW_SMOOTH) || defined(ENABLE_VARIANCE_FLOW_ACCUMULATE) || defined(ENABLE_EDGE_RECONSTRUCT_SMOOTH) || defined(ENABLE_GRADIENT_GATE_SMOOTH)
+    #define ROLE_GRAD_LUMA
+#endif
+
+#if defined(ENABLE_BILATERAL_HISTORY_SMOOTH) || defined(ENABLE_FREQUENCY_SPLIT_SMOOTH)
+    #define ROLE_HISTORY
+    #define ROLE_HISTORY_CROSS
+#endif
+
+#if defined(ENABLE_GRADIENT_DEBAND) || defined(ENABLE_GAUSSIAN_GRAIN) || defined(ENABLE_VHS_SIMULATION) || defined(ENABLE_CRT_SIMULATION) || defined(ENABLE_PS2_SIMULATION) || defined(ENABLE_PS1_SIMULATION) || defined(ENABLE_ORDERED_DITHER) || defined(ENABLE_SATURN_SIMULATION) || defined(ENABLE_N64_SIMULATION) || defined(ENABLE_PSP_SIMULATION)
+    #define ROLE_HASH
+#endif
+
+#if defined(ROLE_HASH)
+    float hash21(vec2 p) {
+        vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
     }
 #endif
 
-#ifdef ENABLE_FPS_HUD
-    float hud_seg(vec2 p, float mx, float my, float dx, float dy) {
-        vec2 d = abs(p - vec2(mx, my)) - vec2(dx, dy);
-        return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+#if defined(ENABLE_CRT_SIMULATION) || defined(ENABLE_VHS_SIMULATION) || defined(ENABLE_GAUSSIAN_GRAIN) || defined(ENABLE_PS2_SIMULATION) || defined(ENABLE_XBOX360_SIMULATION)
+    float fast_sin(float x) {
+        x = x * 0.15915494 + 0.5;
+        x = fract(x) * 2.0 - 1.0;
+        float a = abs(x);
+        return x * (3.5841 - 2.5841 * a) * (1.0 - a);
     }
-
-    float hud_digit(vec2 p, float n) {
-        p.y = 1.0 - p.y;
-
-        float s0 = hud_seg(p, 0.5, 0.85, 0.15, 0.0);
-        float s1 = hud_seg(p, 0.75, 0.65, 0.0, 0.15);
-        float s2 = hud_seg(p, 0.75, 0.25, 0.0, 0.15);
-        float s3 = hud_seg(p, 0.5, 0.05, 0.15, 0.0);
-        float s4 = hud_seg(p, 0.25, 0.25, 0.0, 0.15);
-        float s5 = hud_seg(p, 0.25, 0.65, 0.0, 0.15);
-        float s6 = hud_seg(p, 0.5, 0.45, 0.15, 0.0);
-
-        float d = 999.0;
-        if (n < 0.5) d = min(s0, min(s1, min(s2, min(s3, min(s4, s5)))));
-        else if (n < 1.5) d = min(s1, s2);
-        else if (n < 2.5) d = min(s0, min(s1, min(s6, min(s4, s3))));
-        else if (n < 3.5) d = min(s0, min(s1, min(s6, min(s2, s3))));
-        else if (n < 4.5) d = min(s5, min(s6, min(s1, s2)));
-        else if (n < 5.5) d = min(s0, min(s5, min(s6, min(s2, s3))));
-        else if (n < 6.5) d = min(s0, min(s5, min(s6, min(s4, min(s3, s2)))));
-        else if (n < 7.5) d = min(s0, min(s1, s2));
-        else if (n < 8.5) d = min(s0, min(s1, min(s2, min(s3, min(s4, min(s5, s6))))));
-        else d = min(s0, min(s1, min(s2, min(s3, min(s5, s6)))));
-
-        return d;
+    float fast_cos(float x) {
+        return fast_sin(x + 1.5707963);
     }
 #endif
 
-#ifdef ENABLE_YCOCG_CLIP_SMOOTH
+#if defined(ENABLE_PS1_SIMULATION) || defined(ENABLE_SATURN_SIMULATION) || defined(ENABLE_N64_SIMULATION) || defined(ENABLE_PSP_SIMULATION) || defined(ENABLE_ORDERED_DITHER)
+    const float BAYER4[16] = float[16](
+         0.0,  8.0,  2.0, 10.0,
+        12.0,  4.0, 14.0,  6.0,
+         3.0, 11.0,  1.0,  9.0,
+        15.0,  7.0, 13.0,  5.0
+    );
+    float bayer_signed(vec2 fc) {
+        int ix = int(floor(fc.x)) & 3;
+        int iy = int(floor(fc.y)) & 3;
+        return (BAYER4[ix + iy * 4] + 0.5) * 0.0625 - 0.5;
+    }
+#endif
+
+#if defined(ENABLE_YCOCG_CLIP_SMOOTH)
     vec3 ycocg_encode(vec3 x) {
         return vec3(0.25 * x.r + 0.5 * x.g + 0.25 * x.b,
                     0.5 * x.r - 0.5 * x.b,
                     -0.25 * x.r + 0.5 * x.g - 0.25 * x.b);
     }
-
     vec3 ycocg_decode(vec3 y) {
         return vec3(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z);
     }
 #endif
 
-#ifdef ENABLE_PERCEPTUAL_CHROMA_SMOOTH
+#if defined(ENABLE_PERCEPTUAL_CHROMA_SMOOTH)
     vec3 perc_ycc(vec3 x) {
-        const float CB_SCALE = 1.8556;
-        const float CR_SCALE = 1.5748;
         float y = dot(x, LUMA_BT709);
-        return vec3(y, (x.b - y) / max(CB_SCALE, 0.0001),
-                       (x.r - y) / max(CR_SCALE, 0.0001));
+        return vec3(y, (x.b - y) * 0.5388766, (x.r - y) * 0.6350048);
     }
-
     vec3 perc_rgb(vec3 y) {
-        const float CB_SCALE = 1.8556;
-        const float CR_SCALE = 1.5748;
-        float r = y.x + y.z * CR_SCALE;
-        float b = y.x + y.y * CB_SCALE;
-        float g = (y.x - LUMA_BT709.r * r - LUMA_BT709.b * b) / max(LUMA_BT709.g, 0.0001);
+        float r = y.x + y.z * 1.5748;
+        float b = y.x + y.y * 1.8556;
+        float g = (y.x - LUMA_BT709.r * r - LUMA_BT709.b * b) * 1.398313;
         return vec3(r, g, b);
     }
 #endif
 
-#ifdef ENABLE_ORDERED_DITHER
-    const float bones_bayer4x4[16] = float[16](
-        0.0, 8.0, 2.0, 10.0,
-        12.0, 4.0, 14.0, 6.0,
-        3.0, 11.0, 1.0, 9.0,
-        15.0, 7.0, 13.0, 5.0
-    );
-
-    float dither_cell(float di) {
-        return bones_bayer4x4[int(di)];
-    }
-#endif
-
-#ifdef ENABLE_HABLE_TONEMAP
+#if defined(ENABLE_HABLE_TONEMAP)
     vec3 hable_map(vec3 x) {
-        const float HA = 0.15;
-        const float HB = 0.5;
-        const float HC = 0.1;
-        const float HD = 0.2;
-        const float HE = 0.02;
-        const float HF = 0.3;
-        return ((x * (HA * x + HC * HB) + HD * HE) /
-                (x * (HA * x + HB) + HD * max(HF, 0.0001))) -
-               HE / max(HF, 0.0001);
+        return ((x * (0.15 * x + 0.05) + 0.004) /
+                (x * (0.15 * x + 0.50) + 0.060)) - 0.066666666;
     }
 #endif
 
-#ifdef ENABLE_AGX_TONEMAP
+#if defined(ENABLE_AGX_TONEMAP)
     vec3 agx_contrast(vec3 x) {
         vec3 x2 = x * x;
         vec3 x4 = x2 * x2;
@@ -1183,29 +1276,94 @@ const vec3 LUMA_BT709 = vec3(0.2126, 0.7152, 0.0722);
              - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
     }
 #endif
-#ifdef ENABLE_UCHIMURA_TONEMAP
-    float uchi_map(float x) {
-        const float P = 1.0;
-        const float A = 1.0;
-        const float M = 0.22;
-        const float L = 0.4;
-        const float C = 1.33;
-        float u_l0 = ((P - M) * L) / max(A, 0.0001);
-        float u_s0 = M + u_l0;
-        float u_s1 = M + A * u_l0;
-        float u_c2 = (A * P) / max(P - u_s1, 0.0001);
-        float u_toe = M * pow(max(x, 0.0) / max(M, 0.0001), C);
-        float u_lin = M + A * (x - M);
-        float u_sho = P - (P - u_s1) * exp(-u_c2 * (x - u_s0) / max(P, 0.0001));
-        return mix(mix(u_toe, u_lin, smoothstep(0.0, M, x)),
-                   u_sho, smoothstep(M, u_s0, x));
+
+#if defined(ENABLE_UCHIMURA_TONEMAP)
+    vec3 uchi_map(vec3 x) {
+        const float U_P = 1.0;
+        const float U_A = 1.0;
+        const float U_M = 0.22;
+        const float U_L = 0.4;
+        const float U_C = 1.33;
+        float u_l0 = (U_P - U_M) * U_L;
+        float u_s0 = U_M + u_l0;
+        float u_s1 = U_M + U_A * u_l0;
+        float u_c2 = (U_A * U_P) / max(U_P - u_s1, 0.0001);
+        vec3 u_toe = U_M * pow(max(x, ZERO3) / max(U_M, 0.0001), vec3(U_C));
+        vec3 u_lin = vec3(U_M) + U_A * (x - U_M);
+        vec3 u_sho = U_P - (U_P - u_s1) * exp(-u_c2 * (x - u_s0));
+        return mix(mix(u_toe, u_lin, smoothstep(0.0, U_M, x)),
+                   u_sho, smoothstep(U_M, u_s0, x));
+    }
+#endif
+
+#if defined(ENABLE_MITCHELL_KERNEL_SMOOTH)
+    float mn_kernel(float x) {
+        float ax = abs(x);
+        float ax2 = ax * ax;
+        float ax3 = ax2 * ax;
+        float w_inner = 1.16666667 * ax3 - 2.0 * ax2 + 0.88888889;
+        float w_outer = -0.38888889 * ax3 + 2.0 * ax2 - 3.33333333 * ax + 1.77777778;
+        float in_inner = step(ax, 1.0);
+        float in_outer = step(ax, 2.0) - in_inner;
+        return w_inner * in_inner + w_outer * in_outer;
+    }
+    float mn_w2d(float dx, float dy) {
+        return mn_kernel(dx) * mn_kernel(dy);
+    }
+#endif
+
+#if defined(ENABLE_FPS_HUD)
+    float hud_seg(vec2 p, float mx, float my, float dx, float dy) {
+        vec2 d = abs(p - vec2(mx, my)) - vec2(dx, dy);
+        return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+    }
+
+    float hud_digit(vec2 p, float n) {
+        p.y = 1.0 - p.y;
+        float s0 = hud_seg(p, 0.5, 0.85, 0.15, 0.0);
+        float s1 = hud_seg(p, 0.75, 0.65, 0.0, 0.15);
+        float s2 = hud_seg(p, 0.75, 0.25, 0.0, 0.15);
+        float s3 = hud_seg(p, 0.5, 0.05, 0.15, 0.0);
+        float s4 = hud_seg(p, 0.25, 0.25, 0.0, 0.15);
+        float s5 = hud_seg(p, 0.25, 0.65, 0.0, 0.15);
+        float s6 = hud_seg(p, 0.5, 0.45, 0.15, 0.0);
+        float ge0 = step(0.5, n);
+        float ge1 = step(1.5, n);
+        float ge2 = step(2.5, n);
+        float ge3 = step(3.5, n);
+        float ge4 = step(4.5, n);
+        float ge5 = step(5.5, n);
+        float ge6 = step(6.5, n);
+        float ge7 = step(7.5, n);
+        float ge8 = step(8.5, n);
+        float m0 = 1.0 - ge0;
+        float m1 = ge0 - ge1;
+        float m2 = ge1 - ge2;
+        float m3 = ge2 - ge3;
+        float m4 = ge3 - ge4;
+        float m5 = ge4 - ge5;
+        float m6 = ge5 - ge6;
+        float m7 = ge6 - ge7;
+        float m8 = ge7 - ge8;
+        float m9 = ge8;
+        float r0 = m0 * min(s0, min(s1, min(s2, min(s3, min(s4, s5)))));
+        float r1 = m1 * min(s1, s2);
+        float r2 = m2 * min(s0, min(s1, min(s6, min(s4, s3))));
+        float r3 = m3 * min(s0, min(s1, min(s6, min(s2, s3))));
+        float r4 = m4 * min(s5, min(s6, min(s1, s2)));
+        float r5 = m5 * min(s0, min(s5, min(s6, min(s2, s3))));
+        float r6 = m6 * min(s0, min(s5, min(s6, min(s4, min(s3, s2)))));
+        float r7 = m7 * min(s0, min(s1, s2));
+        float r8 = m8 * min(s0, min(s1, min(s2, min(s3, min(s4, min(s5, s6))))));
+        float r9 = m9 * min(s0, min(s1, min(s2, min(s3, min(s5, s6)))));
+        return r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9;
     }
 #endif
 
 void main() {
     vec2 inv = 1.0 / u_resolution;
-    vec2 v_uv = gl_FragCoord.xy / u_resolution;
-    float res_scale = u_resolution.y / 1080.0;
+    vec2 v_uv = gl_FragCoord.xy * inv;
+    float res_scale = u_resolution.y * 0.0009259259;
 
     #ifdef ENABLE_MIRROR_HORIZONTAL
         v_uv.x = 1.0 - v_uv.x;
@@ -1220,7 +1378,7 @@ void main() {
     #endif
 
     #ifdef ENABLE_ROTATE_180
-        v_uv = vec2(1.0 - v_uv.x, 1.0 - v_uv.y);
+        v_uv = vec2(1.0) - v_uv;
     #endif
 
     #ifdef ENABLE_ROTATE_270
@@ -1228,55 +1386,39 @@ void main() {
     #endif
 
     #ifdef ENABLE_CENTER_ZOOM
-        {
-            const float ZF = 1.5;
-            v_uv = vec2(0.5) + (v_uv - vec2(0.5)) / max(ZF, 0.0001);
-        }
+        v_uv = HALF2 + (v_uv - HALF2) * 0.6666666667;
     #endif
 
     #ifdef ENABLE_POLYNOMIAL_DISTORT
         {
-            const float K1 = 0.1;
-            const float K2 = 0.0;
-            vec2 dc = v_uv - vec2(0.5);
-            float r2 = dot(dc, dc);
-            v_uv = vec2(0.5) + dc * (1.0 + K1 * r2 + K2 * r2 * r2);
+            vec2 dc = v_uv - HALF2;
+            v_uv = HALF2 + dc * (1.0 + 0.1 * dot(dc, dc));
         }
     #endif
 
     #ifdef ENABLE_BARREL_UNDISTORT
         {
-            const float BS = 0.2;
-            vec2 bc = v_uv - vec2(0.5);
-            float r2 = dot(bc, bc);
-            v_uv = vec2(0.5) + bc / max(1.0 + BS * r2, 0.0001);
+            vec2 bc = v_uv - HALF2;
+            v_uv = HALF2 + bc / max(1.0 + 0.2 * dot(bc, bc), 0.0001);
         }
     #endif
 
     #ifdef ENABLE_FISHEYE_WARP
         {
-            const float FS = 1.0;
-            const float FZ = 1.0;
-            vec2 fc = v_uv - vec2(0.5);
-            float fr = length(fc);
-            float ft = fr * FS;
-            float ff = mix(1.0, atan(ft) / max(ft, 0.0001), step(0.0001, fr));
-            v_uv = vec2(0.5) + fc * ff * FZ;
+            vec2 fc = v_uv - HALF2;
+            float fr = sqrt(dot(fc, fc));
+            float ff = mix(1.0, atan(fr) / max(fr, 0.0001), step(0.0001, fr));
+            v_uv = HALF2 + fc * ff;
         }
     #endif
 
     #ifdef ENABLE_TRAPEZOID_WARP
-        {
-            const float PT = 1.0;
-            const float PB = 1.2;
-            v_uv.x = 0.5 + (v_uv.x - 0.5) * mix(PT, PB, v_uv.y);
-        }
+        v_uv.x = 0.5 + (v_uv.x - 0.5) * mix(1.0, 1.2, v_uv.y);
     #endif
 
     #ifdef ENABLE_SHARP_BILINEAR
         {
-            const float PA = 4.0;
-            vec2 pg = u_resolution / max(PA * res_scale, 1.0);
+            vec2 pg = u_resolution / max(4.0 * res_scale, 1.0);
             vec2 pt = v_uv * pg;
             vec2 pi = floor(pt - 0.5) + 0.5;
             vec2 pf = pt - pi;
@@ -1285,53 +1427,148 @@ void main() {
         }
     #endif
 
-    vec3 tap_0_0 = texture(u_input, v_uv).rgb;
-
-    #if defined(ENABLE_LUMA_EDGE_AA) || defined(ENABLE_NORMAL_FILTER_AA) || defined(ENABLE_MORPHOLOGICAL_AA) || defined(ENABLE_SUBPIXEL_AA) || defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_ROBUST_CONTRAST_SHARPEN) || defined(ENABLE_EDGE_DIRECTED_SHARPEN) || defined(ENABLE_LAPLACIAN_SHARPEN) || defined(ENABLE_LUMINANCE_SHARPEN) || defined(ENABLE_MIDTONE_CLARITY) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_POWER_CURVE_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_LOCAL_CONTRAST) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_THRESHOLD_BLOOM) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_SIGMA_CLIP_SMOOTH) || defined(ENABLE_DUALRATE_SMOOTH) || defined(ENABLE_HORN_SCHUNCK_SMOOTH) || defined(ENABLE_FREQUENCY_SPLIT_SMOOTH) || defined(ENABLE_GRADIENT_GATE_SMOOTH) || defined(ENABLE_BILATERAL_HISTORY_SMOOTH) || defined(ENABLE_CONTRAST_GATE_SMOOTH) || defined(ENABLE_DUALWARP_FLOW_SMOOTH) || defined(ENABLE_VARIANCE_FLOW_ACCUMULATE) || defined(ENABLE_EDGE_RECONSTRUCT_SMOOTH)
-        vec3 tap_1_0   = texture(u_input, v_uv + vec2( 1.0,  0.0) * inv).rgb;
-        vec3 tap_m1_0  = texture(u_input, v_uv + vec2(-1.0,  0.0) * inv).rgb;
-        vec3 tap_0_1   = texture(u_input, v_uv + vec2( 0.0,  1.0) * inv).rgb;
-        vec3 tap_0_m1  = texture(u_input, v_uv + vec2( 0.0, -1.0) * inv).rgb;
+    #ifdef ENABLE_CRT_SIMULATION
+        {
+            vec2 cc2 = v_uv - HALF2;
+            float cr = dot(cc2, cc2);
+            v_uv = v_uv + cc2 * cr * vec2(0.031, 0.041);
+        }
     #endif
 
-    #if defined(ENABLE_LUMA_EDGE_AA) || defined(ENABLE_MORPHOLOGICAL_AA) || defined(ENABLE_SUBPIXEL_AA) || defined(ENABLE_CONTRAST_ADAPTIVE_SHARPEN) || defined(ENABLE_FALLOFF_SHARPEN) || defined(ENABLE_UNSHARP_MASK) || defined(ENABLE_GAUSSIAN_BLUR) || defined(ENABLE_THRESHOLD_BLOOM) || defined(ENABLE_NEIGHBORHOOD_CLAMP_AA) || defined(ENABLE_SIGMA_CLIP_SMOOTH)
-        vec3 tap_1_1   = texture(u_input, v_uv + vec2( 1.0,  1.0) * inv).rgb;
-        vec3 tap_m1_1  = texture(u_input, v_uv + vec2(-1.0,  1.0) * inv).rgb;
-        vec3 tap_1_m1  = texture(u_input, v_uv + vec2( 1.0, -1.0) * inv).rgb;
-        vec3 tap_m1_m1 = texture(u_input, v_uv + vec2(-1.0, -1.0) * inv).rgb;
+    #ifdef ENABLE_VHS_SIMULATION
+        {
+            float vrip_arg = v_uv.y * 4.77464829;
+            float vrip = (abs(fract(vrip_arg) - 0.5) * 4.0 - 1.0) * 1.5 * res_scale * inv.x;
+            v_uv.x = v_uv.x + vrip;
+        }
     #endif
 
-    vec3 c = tap_0_0;
+    #ifdef ENABLE_PS1_SIMULATION
+        {
+            const float PS1_GRID = 140.0;
+            vec2 ps_grid = floor(v_uv * PS1_GRID);
+            v_uv = (ps_grid + 0.5) * 0.00714286;
+        }
+    #endif
 
-    #ifdef ENABLE_IDENTITY
+    #ifdef ENABLE_SATURN_SIMULATION
+        {
+            float sat_ps = 2.0 * res_scale;
+            v_uv = (floor(v_uv * u_resolution / sat_ps) + 0.5) * sat_ps * inv;
+        }
+    #endif
+
+    #ifdef ENABLE_N64_SIMULATION
+        {
+            float n64_ps = 1.5 * res_scale;
+            v_uv = (floor(v_uv * u_resolution / n64_ps) + 0.5) * n64_ps * inv;
+        }
+    #endif
+
+    #ifdef ENABLE_PS2_SIMULATION
+        {
+            float ps2_ps = 1.8 * res_scale;
+            v_uv = (floor(v_uv * u_resolution / ps2_ps) + 0.5) * ps2_ps * inv;
+        }
+    #endif
+
+    #ifdef ENABLE_PSP_SIMULATION
+        {
+            vec2 psp_res = vec2(480.0, 272.0);
+            v_uv = (floor(v_uv * psp_res) + 0.5) / psp_res;
+        }
+    #endif
+
+    #ifdef ENABLE_PS3_SIMULATION
+        {
+            vec2 ps3_res = u_resolution * 0.72;
+            v_uv = (floor(v_uv * ps3_res) + 0.5) / ps3_res;
+        }
+    #endif
+
+    vec3 c;
+    #ifdef ENABLE_CHROMATIC_ABERRATION
+        {
+            vec2 ca_d = (v_uv - HALF2) * 0.005;
+            c.r = texture(u_input, v_uv + ca_d).r;
+            c.g = texture(u_input, v_uv).g;
+            c.b = texture(u_input, v_uv - ca_d).b;
+        }
+    #else
+        c = texture(u_input, v_uv).rgb;
+    #endif
+
+    #ifdef ROLE_TAPS_CROSS
+        vec3 tap_1_0  = texture(u_input, v_uv + vec2( inv.x, 0.0)).rgb;
+        vec3 tap_m1_0 = texture(u_input, v_uv + vec2(-inv.x, 0.0)).rgb;
+        vec3 tap_0_1  = texture(u_input, v_uv + vec2(0.0,  inv.y)).rgb;
+        vec3 tap_0_m1 = texture(u_input, v_uv + vec2(0.0, -inv.y)).rgb;
+    #endif
+
+    #ifdef ROLE_TAPS_CORNER
+        vec3 tap_1_1   = texture(u_input, v_uv + vec2( inv.x,  inv.y)).rgb;
+        vec3 tap_m1_1  = texture(u_input, v_uv + vec2(-inv.x,  inv.y)).rgb;
+        vec3 tap_1_m1  = texture(u_input, v_uv + vec2( inv.x, -inv.y)).rgb;
+        vec3 tap_m1_m1 = texture(u_input, v_uv + vec2(-inv.x, -inv.y)).rgb;
+    #endif
+
+    #ifdef ROLE_SUM_CROSS
+        vec3 cross_sum = tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1;
+        vec3 cross_avg = cross_sum * 0.25;
+    #endif
+
+    #ifdef ROLE_SUM_CORNER
+        vec3 corner_sum = tap_1_1 + tap_m1_1 + tap_1_m1 + tap_m1_m1;
+    #endif
+
+    #ifdef ROLE_BOUNDS_CROSS
+        vec3 box_min_x = min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1));
+        vec3 box_max_x = max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1));
+    #endif
+
+    #ifdef ROLE_BOUNDS_3X3
+        vec3 box_min_3x3 = min(box_min_x, min(min(tap_1_1, tap_m1_1), min(tap_1_m1, tap_m1_m1)));
+        vec3 box_max_3x3 = max(box_max_x, max(max(tap_1_1, tap_m1_1), max(tap_1_m1, tap_m1_m1)));
+    #endif
+
+    #ifdef ROLE_GRAD_LUMA
+        vec3 grad_x_rgb = tap_1_0 - tap_m1_0;
+        vec3 grad_y_rgb = tap_0_1 - tap_0_m1;
+        float lgrad_x = dot(grad_x_rgb, LUMA_AVG);
+        float lgrad_y = dot(grad_y_rgb, LUMA_AVG);
+    #endif
+
+    #ifdef ROLE_HISTORY
+        vec3 history = texture(u_history, v_uv).rgb;
+        float hist_valid = step(1e-6, dot(history, history));
+    #endif
+
+    #ifdef ROLE_HISTORY_CROSS
+        vec3 hist_e = texture(u_history, v_uv + vec2( inv.x, 0.0)).rgb;
+        vec3 hist_w = texture(u_history, v_uv + vec2(-inv.x, 0.0)).rgb;
+        vec3 hist_n = texture(u_history, v_uv + vec2(0.0,  inv.y)).rgb;
+        vec3 hist_s = texture(u_history, v_uv + vec2(0.0, -inv.y)).rgb;
     #endif
 
     #ifdef ENABLE_BILATERAL_DENOISE
         {
-            const float DR = 1.0;
-            const float DS = 0.01;
-            const float DT = 0.6;
-            float dr = DR * res_scale;
-            vec3 ds = c;
-            float dw = 1.0;
-            for (int di = -1; di <= 1; di++) {
-                for (int dj = -1; dj <= 1; dj++) {
-                    vec3 dd = texture(u_input, v_uv + vec2(float(di), float(dj)) * dr * inv).rgb;
-                    vec3 de = dd - c;
-                    float dk = exp(-dot(de, de) / max(DS, 0.0001));
-                    ds += dd * dk;
-                    dw += dk;
-                }
-            }
-            c = mix(c, ds / max(dw, 0.0001), DT);
+            vec3 e00 = tap_m1_m1 - c; float w00 = 1.0 / (1.0 + dot(e00, e00) * 100.0);
+            vec3 e10 = tap_0_m1  - c; float w10 = 1.0 / (1.0 + dot(e10, e10) * 100.0);
+            vec3 e20 = tap_1_m1  - c; float w20 = 1.0 / (1.0 + dot(e20, e20) * 100.0);
+            vec3 e01 = tap_m1_0  - c; float w01 = 1.0 / (1.0 + dot(e01, e01) * 100.0);
+            vec3 e21 = tap_1_0   - c; float w21 = 1.0 / (1.0 + dot(e21, e21) * 100.0);
+            vec3 e02 = tap_m1_1  - c; float w02 = 1.0 / (1.0 + dot(e02, e02) * 100.0);
+            vec3 e12 = tap_0_1   - c; float w12 = 1.0 / (1.0 + dot(e12, e12) * 100.0);
+            vec3 e22 = tap_1_1   - c; float w22 = 1.0 / (1.0 + dot(e22, e22) * 100.0);
+            vec3 ds = tap_m1_m1*w00 + tap_0_m1*w10 + tap_1_m1*w20 + tap_m1_0*w01 + c
+                    + tap_1_0*w21 + tap_m1_1*w02 + tap_0_1*w12 + tap_1_1*w22;
+            float dw = w00 + w10 + w20 + w01 + 1.0 + w21 + w02 + w12 + w22;
+            c = mix(c, ds / max(dw, 0.0001), 0.6);
         }
     #endif
 
     #ifdef ENABLE_LUMA_EDGE_AA
         {
-            const float RM = 0.125;
-            const float RN = 0.0078125;
-            const float SM = 8.0;
             float lc = dot(c, LUMA_BT601);
             float ln = dot(tap_0_m1, LUMA_BT601);
             float ls = dot(tap_0_1, LUMA_BT601);
@@ -1344,13 +1581,13 @@ void main() {
             float fmn = min(lc, min(min(ln, ls), min(le, lw)));
             float fmx = max(lc, max(max(ln, ls), max(le, lw)));
             vec2 fd = vec2(-((lnw + lne) - (lsw + lse)), (lnw + lsw) - (lne + lse));
-            float fr = max((lnw + lne + lsw + lse) * RM * 0.25, RN);
+            float fr = max((lnw + lne + lsw + lse) * 0.03125, 0.0078125);
             float fp = 1.0 / max(min(abs(fd.x), abs(fd.y)) + fr, 0.0001);
-            fd = clamp(fd * fp, vec2(-SM), vec2(SM)) * inv;
-            vec3 fa = (texture(u_input, v_uv + fd * (1.0 / 3.0 - 0.5)).rgb +
-                       texture(u_input, v_uv + fd * (2.0 / 3.0 - 0.5)).rgb) * 0.5;
+            fd = clamp(fd * fp, vec2(-8.0), vec2(8.0)) * inv;
+            vec3 fa = (texture(u_input, v_uv + fd * -0.16666667).rgb +
+                       texture(u_input, v_uv + fd *  0.16666667).rgb) * 0.5;
             vec3 fb = fa * 0.5 + (texture(u_input, v_uv + fd * -0.5).rgb +
-                                  texture(u_input, v_uv + fd * 0.5).rgb) * 0.25;
+                                  texture(u_input, v_uv + fd *  0.5).rgb) * 0.25;
             float fl = dot(fb, LUMA_BT601);
             c = mix(fb, fa, clamp(step(fl, fmn) + step(fmx, fl), 0.0, 1.0));
         }
@@ -1358,40 +1595,27 @@ void main() {
 
     #ifdef ENABLE_NORMAL_FILTER_AA
         {
-            const float NS = 1.5;
-            const float NN = 4.0;
-            float ns = NS * res_scale;
-            float ne = (tap_1_0.r + tap_1_0.g + tap_1_0.b) / 3.0;
-            float nw = (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b) / 3.0;
-            float nn = (tap_0_1.r + tap_0_1.g + tap_0_1.b) / 3.0;
-            float nd = (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b) / 3.0;
-            vec2 ng = vec2(nw - ne, nn - nd);
-            vec2 nt = vec2(-ng.y, ng.x) * ns * inv;
+            vec2 nt = vec2(-lgrad_y, lgrad_x) * (1.5 * res_scale) * inv;
+            float ng2 = lgrad_x * lgrad_x + lgrad_y * lgrad_y;
             c = mix(c, (texture(u_input, v_uv + nt).rgb +
-                        texture(u_input, v_uv - nt).rgb + c) / 3.0,
-                    clamp(length(ng) * NN, 0.0, 1.0));
+                        texture(u_input, v_uv - nt).rgb + c) * 0.3333333,
+                    clamp(ng2 * 16.0, 0.0, 1.0));
         }
     #endif
 
     #ifdef ENABLE_MORPHOLOGICAL_AA
         {
-            const float CT = 0.1;
-            const float CS = 0.1;
-            const float CW = 0.7;
             vec3 ca = (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * 0.25;
             vec3 cd = (tap_1_1 + tap_m1_1 + tap_1_m1 + tap_m1_m1) * 0.25;
-            float ce = (abs(dot(tap_1_0 - tap_m1_0, vec3(1.0))) +
-                        abs(dot(tap_0_1 - tap_0_m1, vec3(1.0)))) / 6.0;
-            c = mix(c, (ca + cd) * 0.5, smoothstep(CT, CT + CS, ce) * CW);
+            vec3 dx_abs = abs(tap_1_0 - tap_m1_0);
+            vec3 dy_abs = abs(tap_0_1 - tap_0_m1);
+            float ce = (dx_abs.r + dx_abs.g + dx_abs.b + dy_abs.r + dy_abs.g + dy_abs.b) * 0.16666667;
+            c = mix(c, (ca + cd) * 0.5, smoothstep(0.1, 0.2, ce) * 0.7);
         }
     #endif
 
     #ifdef ENABLE_SUBPIXEL_AA
         {
-            const float ST = 0.1;
-            const float SS = 0.1;
-            const float SD = 0.3;
-            const float SX = 0.75;
             float sh = abs(tap_1_0.g - c.g) + abs(tap_m1_0.g - c.g);
             float sv = abs(tap_0_1.g - c.g) + abs(tap_0_m1.g - c.g);
             float se = max(sh, sv);
@@ -1399,933 +1623,497 @@ void main() {
                            (tap_0_1 + tap_0_m1) * 0.5,
                            step(sv, sh));
             vec3 sd2 = (tap_1_1 + tap_m1_1 + tap_1_m1 + tap_m1_m1) * 0.25;
-            c = mix(c, mix(sc2, sd2, SD), min(smoothstep(ST, ST + SS, se), SX));
+            c = mix(c, mix(sc2, sd2, 0.3), min(smoothstep(0.1, 0.2, se), 0.75));
         }
     #endif
 
     #ifdef ENABLE_CONTRAST_ADAPTIVE_SHARPEN
         {
-            const float CS2 = 0.5;
-            const float PL = 0.125;
-            const float PH = 0.2;
-            vec3 mn = min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1));
-            vec3 mx = max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1));
-            mn = min(mn, min(min(tap_1_1, tap_m1_1), min(tap_1_m1, tap_m1_m1)));
-            mx = max(mx, max(max(tap_1_1, tap_m1_1), max(tap_1_m1, tap_m1_m1)));
-            mn = min(mn, c);
-            mx = max(mx, c);
-            vec3 amp = sqrt(clamp(min(mn, vec3(2.0) - mx) / max(mx, vec3(0.0001)), 0.0, 1.0));
-            vec3 w = amp * mix(PL, PH, CS2);
-            c = clamp(((tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * w + c) /
-                       max(w * 4.0 + vec3(1.0), vec3(0.0001)), 0.0, 1.0);
+            vec3 mn = min(box_min_3x3, c);
+            vec3 mx = max(box_max_3x3, c);
+            vec3 amp = sqrt(clamp(min(mn, 2.0 - mx) / max(mx, vec3(0.0001)), 0.0, 1.0));
+            vec3 w = -(amp * 0.1625);
+            c = clamp((cross_sum * w + c) / max(w * 4.0 + ONE3, vec3(0.0001)), 0.0, 1.0);
         }
     #endif
 
     #ifdef ENABLE_ROBUST_CONTRAST_SHARPEN
-        {
-            const float RS = 0.25;
-            vec3 rmn = min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1));
-            vec3 rmx = max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1));
-            vec3 rsu = tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1;
-            c = clamp(c + (c * 4.0 - rsu) * RS * 0.25, min(rmn, c), max(rmx, c));
-        }
+        c = clamp(c + (c * 4.0 - cross_sum) * 0.0625, min(box_min_x, c), max(box_max_x, c));
     #endif
 
     #ifdef ENABLE_EDGE_DIRECTED_SHARPEN
         {
-            const float ES = 0.5;
-            const float EE = 8.0;
-            const float EF = 0.0;
-            float eh = ((tap_1_0.r + tap_1_0.g + tap_1_0.b) -
-                        (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 3.0;
-            float ev = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
-                        (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 3.0;
-            float eg = length(vec2(eh, ev));
-            float ew = ES * clamp(eg * EE, EF, 1.0);
-            c = clamp(c + (c * 4.0 - (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1)) * ew * 0.25,
-                      0.0, 1.0);
+            float eg2 = lgrad_x * lgrad_x + lgrad_y * lgrad_y;
+            float ew = 0.5 * clamp(eg2 * 64.0, 0.0, 1.0);
+            c = clamp(c + (c * 4.0 - cross_sum) * ew * 0.25, 0.0, 1.0);
         }
     #endif
 
     #ifdef ENABLE_LAPLACIAN_SHARPEN
-        {
-            const float LS = 0.5;
-            c = c + (c * 4.0 - (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1)) * LS * 0.25;
-        }
+        c = clamp(c + (c - cross_avg) * 0.5, 0.0, 1.0);
     #endif
 
     #ifdef ENABLE_LUMINANCE_SHARPEN
         {
-            const float LS2 = 1.0;
-            const float LC = 0.1;
             float ll = dot(c, LUMA_BT601);
-            float la = dot(tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1, LUMA_BT601) * 0.25;
-            float ld = clamp((ll - la) * LS2, -LC, LC);
+            float la = dot(cross_avg, LUMA_BT601);
+            float ld = clamp(ll - la, -0.1, 0.1);
             c = c + vec3(ld);
         }
     #endif
 
     #ifdef ENABLE_MIDTONE_CLARITY
         {
-            const float MC = 0.5;
-            vec3 mb = (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * 0.25;
-            float ml = (c.r + c.g + c.b) / 3.0;
+            float ml = dot(c, LUMA_AVG);
             float mm = 1.0 - abs(ml * 2.0 - 1.0);
-            c = c + (c - mb) * MC * mm;
+            c = c + (c - cross_avg) * 0.5 * mm;
         }
     #endif
 
     #ifdef ENABLE_FALLOFF_SHARPEN
         {
-            const float AW = 0.2;
-            const float DW = 0.05;
-            const float AS = 0.6;
-            const float AA = 4.0;
-            vec3 ab = (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * AW +
-                      (tap_1_1 + tap_m1_1 + tap_1_m1 + tap_m1_m1) * DW;
-            vec3 ad = c - ab / max(AW * 4.0 + DW * 4.0, 0.0001);
+            vec3 ab = cross_sum * 0.2 + corner_sum * 0.05;
+            vec3 ad = c - ab;
             float ae = abs(ad.r) + abs(ad.g) + abs(ad.b);
-            float aw2 = AS / max(1.0 + ae * AA, 0.0001);
-            c = c + ad * aw2;
+            c = c + ad * (0.6 / max(1.0 + ae * 4.0, 0.0001));
         }
     #endif
 
     #ifdef ENABLE_POWER_CURVE_SHARPEN
         {
-            const float PC = 0.7;
-            const float PS = 0.5;
-            vec3 pb = (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * 0.25;
-            vec3 pd = c - pb;
-            c = c + sign(pd) * pow(abs(pd), vec3(PC)) * PS;
+            vec3 pd = c - cross_avg;
+            vec3 ap = abs(pd);
+            c = c + sign(pd) * (ap / (ap + vec3(0.3))) * 0.65;
         }
     #endif
 
     #ifdef ENABLE_UNSHARP_MASK
         {
-            const float UC = 4.0;
-            const float UK = 1.0;
-            const float UD = 0.5;
-            const float UA = 0.5;
-            vec3 ub = (c * UC +
-                       (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * UK +
-                       (tap_1_1 + tap_m1_1 + tap_1_m1 + tap_m1_m1) * UD) /
-                      max(UC + UK * 4.0 + UD * 4.0, 0.0001);
-            c = c + (c - ub) * UA;
+            vec3 ub = (c * 4.0 + cross_sum + corner_sum * 0.5) * 0.1;
+            c = c + (c - ub) * 0.5;
         }
     #endif
 
     #ifdef ENABLE_LOCAL_CONTRAST
         {
-            const float LCA = 0.3;
-            float ll = (c.r + c.g + c.b) / 3.0;
-            vec3 ln2 = (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * 0.25;
-            float la = (ln2.r + ln2.g + ln2.b) / 3.0;
-            c = c * (1.0 + (ll - la) * LCA / max(ll, 0.0001));
+            float ll = dot(c, LUMA_AVG);
+            float la = dot(cross_avg, LUMA_AVG);
+            c = c * (1.0 + (ll - la) * 0.3 / max(ll, 0.0001));
         }
     #endif
 
     #ifdef ENABLE_GAUSSIAN_BLUR
-        {
-            const float BC = 4.0;
-            const float BK = 2.0;
-            const float BD = 1.0;
-            const float BS = 1.0;
-            vec3 bsu = c * BC +
-                       (tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) * BK +
-                       (tap_1_1 + tap_m1_1 + tap_1_m1 + tap_m1_m1) * BD;
-            c = mix(c, bsu / max(BC + BK * 4.0 + BD * 4.0, 0.0001), BS);
-        }
+        c = (c * 4.0 + cross_sum * 2.0 + corner_sum) * 0.0625;
     #endif
 
     #ifdef ENABLE_BOX_BLUR
         {
-            const float BR = 1.0;
-            const float BS2 = 1.0;
-            float br = BR * res_scale;
-            vec3 bs = vec3(0.0);
-            float bn = 0.0;
-            for (int bi = -2; bi <= 2; bi++) {
-                for (int bj = -2; bj <= 2; bj++) {
-                    bs += texture(u_input, v_uv + vec2(float(bi), float(bj)) * br * inv).rgb;
-                    bn += 1.0;
-                }
-            }
-            c = mix(c, bs / max(bn, 1.0), BS2);
+            float br = res_scale;
+            vec2 hp = vec2(br * 0.5 + 0.5) * inv;
+            vec3 k0 = texture(u_input, v_uv + vec2( hp.x,  hp.y)).rgb;
+            vec3 k1 = texture(u_input, v_uv + vec2( hp.x, -hp.y)).rgb;
+            vec3 k2 = texture(u_input, v_uv + vec2(-hp.x,  hp.y)).rgb;
+            vec3 k3 = texture(u_input, v_uv + vec2(-hp.x, -hp.y)).rgb;
+            vec2 hp2 = vec2(br * 1.5 + 0.5) * inv;
+            vec3 k4 = texture(u_input, v_uv + vec2( hp2.x,  hp2.y)).rgb;
+            vec3 k5 = texture(u_input, v_uv + vec2( hp2.x, -hp2.y)).rgb;
+            vec3 k6 = texture(u_input, v_uv + vec2(-hp2.x,  hp2.y)).rgb;
+            vec3 k7 = texture(u_input, v_uv + vec2(-hp2.x, -hp2.y)).rgb;
+            c = (c + k0 + k1 + k2 + k3 + k4 + k5 + k6 + k7) * 0.11111111;
         }
     #endif
 
     #ifdef ENABLE_BOKEH_BLUR
         {
-            const float KR = 4.0;
-            const float KS = 0.7853982;
-            const float KH = 0.5;
-            const float KT = 1.0;
-            float kr = KR * res_scale;
-            vec3 ks = c;
-            float kn = 1.0;
-            for (int ki = 0; ki < 8; ki++) {
-                float ka = float(ki) * KS;
-                vec3 kp = texture(u_input, v_uv + vec2(cos(ka), sin(ka)) * kr * inv).rgb;
-                float kw = 1.0 + dot(kp, vec3(1.0)) * KH;
-                ks += kp * kw;
-                kn += kw;
-            }
-            c = mix(c, ks / max(kn, 0.0001), KT);
+            float kr = 4.0 * res_scale;
+            vec2 d0 = vec2( 0.8535534,  0.3535534) * kr * inv;
+            vec2 d1 = vec2(-0.3535534,  0.8535534) * kr * inv;
+            vec2 d2 = vec2(-0.8535534, -0.3535534) * kr * inv;
+            vec2 d3 = vec2( 0.3535534, -0.8535534) * kr * inv;
+            vec3 k0a = texture(u_input, v_uv + d0).rgb;
+            vec3 k0b = texture(u_input, v_uv - d0).rgb;
+            vec3 k1a = texture(u_input, v_uv + d1).rgb;
+            vec3 k1b = texture(u_input, v_uv - d1).rgb;
+            vec3 k2a = texture(u_input, v_uv + d2).rgb;
+            vec3 k2b = texture(u_input, v_uv - d2).rgb;
+            vec3 k3a = texture(u_input, v_uv + d3).rgb;
+            vec3 k3b = texture(u_input, v_uv - d3).rgb;
+            float w0a = 1.0 + dot(k0a, ONE3) * 0.5;
+            float w0b = 1.0 + dot(k0b, ONE3) * 0.5;
+            float w1a = 1.0 + dot(k1a, ONE3) * 0.5;
+            float w1b = 1.0 + dot(k1b, ONE3) * 0.5;
+            float w2a = 1.0 + dot(k2a, ONE3) * 0.5;
+            float w2b = 1.0 + dot(k2b, ONE3) * 0.5;
+            float w3a = 1.0 + dot(k3a, ONE3) * 0.5;
+            float w3b = 1.0 + dot(k3b, ONE3) * 0.5;
+            vec3 ks = c + k0a*w0a + k0b*w0b + k1a*w1a + k1b*w1b
+                        + k2a*w2a + k2b*w2b + k3a*w3a + k3b*w3b;
+            float kn = 1.0 + w0a + w0b + w1a + w1b + w2a + w2b + w3a + w3b;
+            c = ks / max(kn, 0.0001);
         }
     #endif
 
     #ifdef ENABLE_TILT_SHIFT_BLUR
         {
-            const float TC = 0.5;
-            const float TB = 0.15;
-            const float TF = 0.2;
-            const float TR = 2.0;
-            const float TS = 1.0;
-            float tr = TR * res_scale;
-            float td = clamp((abs(v_uv.y - TC) - TB) / max(TF, 0.0001), 0.0, 1.0);
-            vec3 ts = c;
-            float tn = 1.0;
-            for (int ti = 1; ti <= 4; ti++) {
-                ts += texture(u_input, v_uv + vec2(float(ti), 0.0) * tr * td * inv).rgb;
-                ts += texture(u_input, v_uv - vec2(float(ti), 0.0) * tr * td * inv).rgb;
-                tn += 2.0;
-            }
-            c = mix(c, ts / tn, td * TS);
+            float tr = 2.0 * res_scale;
+            float td = clamp((abs(v_uv.y - 0.5) - 0.15) / 0.2, 0.0, 1.0);
+            float tx = tr * td * inv.x;
+            vec3 ts = c
+                + texture(u_input, v_uv + vec2(tx, 0.0)).rgb
+                + texture(u_input, v_uv - vec2(tx, 0.0)).rgb
+                + texture(u_input, v_uv + vec2(tx * 2.0, 0.0)).rgb
+                + texture(u_input, v_uv - vec2(tx * 2.0, 0.0)).rgb
+                + texture(u_input, v_uv + vec2(tx * 3.0, 0.0)).rgb
+                + texture(u_input, v_uv - vec2(tx * 3.0, 0.0)).rgb
+                + texture(u_input, v_uv + vec2(tx * 4.0, 0.0)).rgb
+                + texture(u_input, v_uv - vec2(tx * 4.0, 0.0)).rgb;
+            c = mix(c, ts * 0.1111111, td);
         }
     #endif
 
     #ifdef ENABLE_RADIAL_BLUR
         {
-            const float RS2 = 0.2;
-            const float RM = 0.5;
-            vec2 rd = (vec2(0.5) - v_uv) * RS2;
-            vec3 rs = c;
-            for (int ri = 1; ri <= 7; ri++) {
-                rs += texture(u_input, v_uv + rd * float(ri) / 7.0).rgb;
-            }
-            c = mix(c, rs / 8.0, RM);
+            vec2 rd = (HALF2 - v_uv) * 0.2;
+            vec3 rs = c
+                + texture(u_input, v_uv + rd * 0.14285714).rgb
+                + texture(u_input, v_uv + rd * 0.28571429).rgb
+                + texture(u_input, v_uv + rd * 0.42857143).rgb
+                + texture(u_input, v_uv + rd * 0.57142857).rgb
+                + texture(u_input, v_uv + rd * 0.71428571).rgb
+                + texture(u_input, v_uv + rd * 0.85714286).rgb
+                + texture(u_input, v_uv + rd).rgb;
+            c = mix(c, rs * 0.125, 0.5);
         }
     #endif
 
     #ifdef ENABLE_GRADIENT_DEBAND
         {
-            const float DR2 = 8.0;
-            const float DT = 0.02;
-            const float DS2 = 1.0;
-            const float DA = 1.0;
-            float dr = DR2 * res_scale;
-            float dh = fract(sin(dot(v_uv, vec2(12.9898, 78.233)) + u_time * DA) * 43758.5453);
-            float da = dh * 6.2831853;
-            vec3 ds = texture(u_input, v_uv + vec2(cos(da), sin(da)) * dr * inv).rgb;
+            float dr = 8.0 * res_scale;
+            vec2 t2 = vec2(u_time);
+            float dh1 = hash21(v_uv + t2);
+            float dh2 = hash21(v_uv + t2 + 17.31);
+            vec2 ddir = vec2(dh1, dh2) * 2.0 - 1.0;
+            ddir = ddir / max(length(ddir), 0.0001);
+            vec3 ds = texture(u_input, v_uv + ddir * dr * inv).rgb;
             vec3 dd = abs(ds - c);
-            float dm = step(max(dd.r, max(dd.g, dd.b)), DT);
-            c = mix(c, (c + ds) * 0.5, dm * DS2);
+            float dm = step(max(dd.r, max(dd.g, dd.b)), 0.02);
+            c = mix(c, (c + ds) * 0.5, dm);
         }
     #endif
 
     #ifdef ENABLE_THRESHOLD_BLOOM
         {
-            const float BT = 0.7;
-            const float BD2 = 12.0;
-            const float BI = 0.6;
-            vec3 bt = vec3(BT);
-            vec3 bs = max(tap_1_0 - bt, vec3(0.0)) * 2.0 +
-                      max(tap_m1_0 - bt, vec3(0.0)) * 2.0 +
-                      max(tap_0_1 - bt, vec3(0.0)) * 2.0 +
-                      max(tap_0_m1 - bt, vec3(0.0)) * 2.0 +
-                      max(tap_1_1 - bt, vec3(0.0)) +
-                      max(tap_m1_1 - bt, vec3(0.0)) +
-                      max(tap_1_m1 - bt, vec3(0.0)) +
-                      max(tap_m1_m1 - bt, vec3(0.0));
-            c = c + bs / max(BD2, 0.0001) * BI;
+            const vec3 THR_BLOOM = vec3(0.7);
+            vec3 bs = max(tap_1_0 - THR_BLOOM, ZERO3) * 2.0 +
+                      max(tap_m1_0 - THR_BLOOM, ZERO3) * 2.0 +
+                      max(tap_0_1 - THR_BLOOM, ZERO3) * 2.0 +
+                      max(tap_0_m1 - THR_BLOOM, ZERO3) * 2.0 +
+                      max(tap_1_1 - THR_BLOOM, ZERO3) +
+                      max(tap_m1_1 - THR_BLOOM, ZERO3) +
+                      max(tap_1_m1 - THR_BLOOM, ZERO3) +
+                      max(tap_m1_m1 - THR_BLOOM, ZERO3);
+            c = c + bs * 0.05;
         }
     #endif
 
     #ifdef ENABLE_GHOST_FLARE
         {
-            const float GS = 0.2;
-            const float GT = 0.7;
-            const float GI = 0.4;
-            const float GF = 1.0;
-            vec2 gc = vec2(0.5) - v_uv;
-            vec3 gg = vec3(0.0);
-            for (int gi = 1; gi <= 3; gi++) {
-                vec3 gs = texture(u_input, v_uv + gc * GS * float(gi)).rgb;
-                gg += max(gs - vec3(GT), vec3(0.0));
-            }
-            c = c + gg * GI * (1.0 - clamp(length(gc) * GF, 0.0, 1.0));
-        }
-    #endif
-
-    #ifdef ENABLE_CRT_SIMULATION
-        {
-            const float CC = 0.5;
-            const float CWX = 0.031;
-            const float CWY = 0.041;
-            const float CMS = 0.3333333;
-            const float CT1 = 0.3333333;
-            const float CT2 = 0.6666666;
-            const float CMD = 0.7;
-            const float CMB = 1.0;
-            const float CSB = 1.0;
-            const float CSH = 0.5;
-            const float CSS = 0.25;
-            const float CSF = 3.1415927;
-            const float CBR = 1.12;
-            vec2 cc = v_uv - vec2(CC);
-            float cr = dot(cc, cc);
-            vec2 cu = v_uv + cc * cr * vec2(CWX, CWY);
-            float ci = step(0.0, cu.x) * step(cu.x, 1.0) * step(0.0, cu.y) * step(cu.y, 1.0);
-            vec3 co = mix(c, crt_fetch_px(cu), 1.0) * ci;
-            float cp = fract(cu.x * u_resolution.x * CMS);
-            float mr = mix(CMD, CMB, step(cp, CT1));
-            float mg = mix(CMD, CMB, step(CT1, cp) * step(cp, CT2));
-            float mb = mix(CMD, CMB, step(CT2, cp));
-            float sc = CSB - CSS * (CSH + CSH * sin(cu.y * u_resolution.y * CSF));
-            c = co * vec3(mr, mg, mb) * sc * CBR;
-        }
-    #endif
-
-    #ifdef ENABLE_PHOSPHOR_AMBER
-        {
-            float pl = dot(c, LUMA_BT601);
-            c = vec3(1.0, 0.75, 0.3) * pl * 1.1;
-        }
-    #endif
-
-    #ifdef ENABLE_PHOSPHOR_GREEN
-        {
-            float pl = dot(c, LUMA_BT601);
-            c = vec3(0.2, 1.0, 0.2) * pl * 1.1;
-        }
-    #endif
-
-    #ifdef ENABLE_PHOSPHOR_RED
-        {
-            float pl = dot(c, LUMA_BT601);
-            c = vec3(1.0, 0.2, 0.2) * pl * 1.1;
-        }
-    #endif
-
-    #ifdef ENABLE_SCANLINE_DARKEN
-        {
-            const float SB = 1.0;
-            const float SH = 0.5;
-            const float SS = 0.3;
-            const float SF = 3.1415927;
-            c = c * (SB - SS * (SH + SH * sin(v_uv.y * u_resolution.y * SF)));
-        }
-    #endif
-
-    #ifdef ENABLE_OLED_SIMULATION
-        {
-            const float OB = 0.05;
-            const float OS = 1.1;
-            float ol = dot(c, LUMA_BT601);
-            float oc = smoothstep(0.0, OB, ol);
-            c = mix(vec3(ol), c, OS) * oc;
-        }
-    #endif
-
-    #ifdef ENABLE_VHS_SIMULATION
-        {
-            const float VJ = 2.0;
-            const float VC = 2.0;
-            const float VN = 0.05;
-            const float VR = 1.0;
-            const float VF = 30.0;
-            const float VS = 2.0;
-            const float VA = 10.0;
-            float vs = res_scale;
-            float vj = (fract(sin(floor(v_uv.y * u_resolution.y) + u_time * VA) * 43758.5453) - 0.5) * VJ * vs * inv.x;
-            float vr = sin(v_uv.y * VF + u_time * VS) * VR * vs * inv.x;
-            vec2 vu = v_uv + vec2(vj + vr, 0.0);
-            float vc = VC * vs * inv.x;
-            c = vec3(texture(u_input, vu + vec2(vc, 0.0)).r,
-                     texture(u_input, vu).g,
-                     texture(u_input, vu - vec2(vc, 0.0)).b);
-            float vn = fract(sin(dot(vu, vec2(12.9898, 78.233)) + u_time * VA) * 43758.5453) - 0.5;
-            c = c + vec3(vn) * VN;
-        }
-    #endif
-
-    #ifdef ENABLE_LCD_SUBPIXEL
-        {
-            const float LC2 = 3.0;
-            const float LG = 0.2;
-            const float LD = 0.6;
-            const float LB = 1.1;
-            float lc = LC2 * res_scale;
-            vec2 lp = fract(gl_FragCoord.xy / lc);
-            float lm = step(LG, lp.x) * step(LG, lp.y);
-            c = c * mix(LD, 1.0, lm) * LB;
-        }
-    #endif
-
-    #ifdef ENABLE_FPS_HUD
-        {
-            const float HX = 0.012;
-            const float HY = 0.012;
-            const float HS = 26.0;
-            float hs = HS * res_scale;
-
-            #ifdef VULKAN_API
-                vec2 hu = v_uv;
-            #else
-                vec2 hu = vec2(v_uv.x, 1.0 - v_uv.y);
-            #endif
-
-            vec2 raw_hp = (hu - vec2(HX, HY)) * u_resolution / hs;
-
-            vec2 hp = raw_hp;
-            hp.x += (1.0 - hp.y) * 0.15;
-
-            float fps_clamped = clamp(u_fps, 0.0, 9999.0);
-            float fps_digit3 = mod(floor(fps_clamped / 1000.0), 10.0);
-            float fps_digit2 = mod(floor(fps_clamped / 100.0), 10.0);
-            float fps_digit1 = mod(floor(fps_clamped / 10.0), 10.0);
-            float fps_digit0 = mod(floor(fps_clamped), 10.0);
-
-            float spacing = 0.7;
-            vec2 fps_pos3 = hp;
-            vec2 fps_pos2 = hp - vec2(spacing, 0.0);
-            vec2 fps_pos1 = hp - vec2(spacing * 2.0, 0.0);
-            vec2 fps_pos0 = hp - vec2(spacing * 3.0, 0.0);
-
-            float show3 = step(1.0, fps_digit3);
-            float show2 = step(1.0, fps_digit3 + fps_digit2);
-            float show1 = step(1.0, fps_digit3 + fps_digit2 + fps_digit1);
-            float show0 = 1.0;
-
-            float d3 = mix(999.0, hud_digit(fps_pos3, fps_digit3), show3);
-            float d2 = mix(999.0, hud_digit(fps_pos2, fps_digit2), show2);
-            float d1 = mix(999.0, hud_digit(fps_pos1, fps_digit1), show1);
-            float d0 = mix(999.0, hud_digit(fps_pos0, fps_digit0), show0);
-
-            float d_text = min(min(d3, d2), min(d1, d0));
-
-            float line_thickness = 0.06;
-            float glow_thickness = 0.35;
-
-            float text_core = 1.0 - smoothstep(line_thickness - 0.015, line_thickness + 0.015, d_text);
-
-            float text_glow = 1.0 - smoothstep(line_thickness, glow_thickness, d_text);
-
-            vec2 bg_center = vec2(1.55, 0.45);
-            vec2 raw_bg_p = raw_hp - bg_center;
-
-            vec2 bg_d = abs(raw_bg_p) - vec2(1.4, 0.2);
-            float bg_dist = length(max(bg_d, 0.0)) + min(max(bg_d.x, bg_d.y), 0.0);
-
-            float bg_alpha = (1.0 - smoothstep(0.1, 0.5, bg_dist)) * 0.75;
-
-            vec3 color_bg   = vec3(0.01, 0.02, 0.05);
-            vec3 color_glow = vec3(0.0, 0.5, 1.0);
-            vec3 color_core = vec3(0.85, 0.95, 1.0);
-
-            c = mix(c, color_bg, bg_alpha);
-            c = mix(c, color_glow, text_glow * 0.85);
-            c = mix(c, color_core, text_core);
-        }
-    #endif
-
-    #ifdef ENABLE_CROSSHAIR_OVERLAY
-        {
-            float cs = res_scale;
-            vec2 cp = abs(gl_FragCoord.xy - u_resolution * 0.5);
-
-            float d_dot = max(0.0, length(cp) - 0.5 * cs);
-
-            vec2 pa_h = cp - vec2(4.0 * cs, 0.0);
-            float h_h = clamp(pa_h.x / (10.0 * cs), 0.0, 1.0);
-            float d_arm_h = length(pa_h - vec2(10.0 * cs * h_h, 0.0));
-
-            vec2 pa_v = cp - vec2(0.0, 4.0 * cs);
-            float h_v = clamp(pa_v.y / (10.0 * cs), 0.0, 1.0);
-            float d_arm_v = length(pa_v - vec2(0.0, 10.0 * cs * h_v));
-
-            float d_cross = min(d_dot, min(d_arm_h, d_arm_v));
-
-            float line_thickness = 1.0 * cs;
-            float glow_thickness = 4.0 * cs;
-
-            float cross_core = 1.0 - smoothstep(line_thickness - 0.5 * cs, line_thickness + 0.5 * cs, d_cross);
-            float cross_glow = 1.0 - smoothstep(line_thickness, glow_thickness, d_cross);
-
-            vec3 color_glow = vec3(0.0, 0.5, 1.0);
-            vec3 color_core = vec3(0.85, 0.95, 1.0);
-
-            c = mix(c, color_glow, cross_glow * 0.85);
-            c = mix(c, color_core, cross_core);
+            const vec3 THR_GHOST = vec3(0.7);
+            vec2 gc = HALF2 - v_uv;
+            vec2 gc_step = gc * 0.2;
+            vec3 gg = max(texture(u_input, v_uv + gc_step).rgb - THR_GHOST, ZERO3)
+                    + max(texture(u_input, v_uv + gc_step * 2.0).rgb - THR_GHOST, ZERO3)
+                    + max(texture(u_input, v_uv + gc_step * 3.0).rgb - THR_GHOST, ZERO3);
+            c = c + gg * 0.4 * (1.0 - clamp(dot(gc, gc), 0.0, 1.0));
         }
     #endif
 
     #ifdef ENABLE_NEIGHBORHOOD_CLAMP_AA
         {
-            const float TB = 0.1;
-            vec3 th = texture(u_history, v_uv).rgb;
-            vec3 tmn = min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1));
-            vec3 tmx = max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1));
-            tmn = min(tmn, min(min(tap_1_1, tap_m1_1), min(tap_1_m1, tap_m1_m1)));
-            tmx = max(tmx, max(max(tap_1_1, tap_m1_1), max(tap_1_m1, tap_m1_m1)));
-            tmn = min(tmn, c);
-            tmx = max(tmx, c);
-            c = mix(clamp(th, tmn, tmx), c, TB);
+            vec3 tmn = min(box_min_3x3, c);
+            vec3 tmx = max(box_max_3x3, c);
+            c = mix(c, mix(c, clamp(history, tmn, tmx), 0.9), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_MOTION_REJECT_DENOISE
         {
-            const float TA = 0.8;
-            const float TM = 8.0;
-            vec3 th = texture(u_history, v_uv).rgb;
-            vec3 td = abs(c - th);
+            vec3 td = abs(c - history);
             float tm = max(td.r, max(td.g, td.b));
-            c = mix(c, th, TA * (1.0 - clamp(tm * TM, 0.0, 1.0)));
+            c = mix(c, mix(c, history, 0.8 * (1.0 - clamp(tm * 8.0, 0.0, 1.0))), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_MOTION_DETECT_BLUR
         {
-            const float MS = 0.5;
-            const float MM = 8.0;
-            vec3 mh = texture(u_history, v_uv).rgb;
-            vec3 md = abs(c - mh);
-            float mm = clamp(max(md.r, max(md.g, md.b)) * MM, 0.0, 1.0);
-            c = mix(mh, c, mix(1.0, MS, mm));
+            vec3 md = abs(c - history);
+            float mm = clamp(max(md.r, max(md.g, md.b)) * 8.0, 0.0, 1.0);
+            c = mix(c, mix(history, c, mix(1.0, 0.5, mm)), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_CONSTANT_BLEND_SMOOTH
-        {
-            c = mix(c, texture(u_history, v_uv).rgb, 0.5);
-        }
+        c = mix(c, mix(c, history, 0.5), hist_valid);
     #endif
 
     #ifdef ENABLE_SHUTTER_ANGLE_SMOOTH
         {
-            const float SA = 180.0;
-            const float FM = 0.9;
-            c = mix(c, texture(u_history, v_uv).rgb, clamp(SA / 360.0, 0.0, FM));
+            vec3 sd = c - history;
+            float sm = clamp(dot(sd, sd) * 30.0, 0.0, 1.0);
+            float sw = 0.5 * (1.0 - sm) + 0.15 * sm;
+            c = mix(c, mix(c, history, sw), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_SPLINE_INTERP_SMOOTH
         {
-            const float CT2 = 0.5;
-            const float CB2 = 0.5;
-            vec3 ch = texture(u_history, v_uv).rgb;
-            vec3 ce = ch + (c - ch) * CT2;
-            c = mix(c, ce, CB2);
+            vec3 p0 = history - (c - history);
+            vec3 p3 = c + (c - history);
+            vec3 m1 = 0.5 * (c - p0);
+            vec3 m2 = 0.5 * (p3 - history);
+            const float h00 =  0.5;
+            const float h10 =  0.125;
+            const float h01 =  0.5;
+            const float h11 = -0.125;
+            vec3 ch = h00 * history + h10 * m1 + h01 * c + h11 * m2;
+            c = mix(c, ch, hist_valid);
         }
     #endif
 
     #ifdef ENABLE_VARIANCE_DECAY_SMOOTH
         {
-            const float EB = 0.6;
-            const float EV = 50.0;
-            const float EM = 0.9;
-            vec3 eh = texture(u_history, v_uv).rgb;
-            vec3 ed = c - eh;
+            vec3 ed = c - history;
             float ev = dot(ed, ed);
-            float ea = EB / max(1.0 + ev * EV, 0.0001);
-            c = mix(c, eh, clamp(ea, 0.0, EM));
+            float ea = 0.6 / max(1.0 + ev * 50.0, 0.0001);
+            c = mix(c, mix(c, history, clamp(ea, 0.0, 0.9)), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_DUALRATE_SMOOTH
         {
-            const float RB = 0.7;
-            const float RN = 0.1;
-            const float RV = 50.0;
-            vec3 rm = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) / 5.0;
+            vec3 rm = (c + cross_sum) * 0.2;
             vec3 r0 = c - rm;
             vec3 r1 = tap_1_0 - rm;
             vec3 r2 = tap_m1_0 - rm;
             vec3 r3 = tap_0_1 - rm;
             vec3 r4 = tap_0_m1 - rm;
-            float rv = (dot(r0, r0) + dot(r1, r1) + dot(r2, r2) + dot(r3, r3) + dot(r4, r4)) / 5.0;
-            float rw = mix(RB, RN, clamp(rv * RV, 0.0, 1.0));
-            c = mix(c, texture(u_history, v_uv).rgb, rw);
+            float rv = (dot(r0, r0) + dot(r1, r1) + dot(r2, r2) + dot(r3, r3) + dot(r4, r4)) * 0.2;
+            float rw = mix(0.7, 0.1, clamp(rv * 50.0, 0.0, 1.0));
+            c = mix(c, mix(c, history, rw), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_LUMINANCE_GATE_SMOOTH
         {
-            const float LD2 = 0.7;
-            const float LB2 = 0.15;
-            const float LT2 = 0.3;
-            vec3 lh = texture(u_history, v_uv).rgb;
             float ll = dot(c, LUMA_BT709);
-            c = mix(c, lh, mix(LD2, LB2, smoothstep(0.0, LT2, ll)));
+            float lw = mix(0.7, 0.15, smoothstep(0.0, 0.3, ll));
+            c = mix(c, mix(c, history, lw), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_CONTRAST_GATE_SMOOTH
         {
-            const float CL = 0.7;
-            const float CH = 0.1;
-            const float CS3 = 8.0;
-            vec3 ch = texture(u_history, v_uv).rgb;
             float cl = dot(c, LUMA_BT709);
-            float cn = dot(tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1, LUMA_BT709) * 0.25;
-            float cc = abs(cl - cn) * CS3;
-            c = mix(c, ch, mix(CL, CH, clamp(cc, 0.0, 1.0)));
+            float cn = dot(cross_avg, LUMA_BT709);
+            float cw = mix(0.7, 0.1, clamp(abs(cl - cn) * 8.0, 0.0, 1.0));
+            c = mix(c, mix(c, history, cw), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_GRADIENT_GATE_SMOOTH
         {
-            const float GB = 0.6;
-            const float GS2 = 12.0;
-            vec3 gh = texture(u_history, v_uv).rgb;
-            float gx = length(tap_1_0 - tap_m1_0);
-            float gy = length(tap_0_1 - tap_0_m1);
-            float ge = clamp((gx + gy) * GS2, 0.0, 1.0);
-            c = mix(c, gh, GB * (1.0 - ge));
+            float gx2 = dot(grad_x_rgb, grad_x_rgb);
+            float gy2 = dot(grad_y_rgb, grad_y_rgb);
+            float ge = clamp((gx2 + gy2) * 144.0, 0.0, 1.0);
+            c = mix(c, mix(c, history, 0.6 * (1.0 - ge)), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_SIGMA_CLIP_SMOOTH
         {
-            const float VG = 1.0;
-            const float VB = 0.6;
-            vec3 vm1 = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1 +
-                        tap_1_1 + tap_m1_1 + tap_1_m1 + tap_m1_m1) / 9.0;
+            vec3 vm1 = (c + cross_sum + corner_sum) * 0.1111111;
             vec3 vm2 = (c * c + tap_1_0 * tap_1_0 + tap_m1_0 * tap_m1_0 +
                         tap_0_1 * tap_0_1 + tap_0_m1 * tap_0_m1 +
                         tap_1_1 * tap_1_1 + tap_m1_1 * tap_m1_1 +
-                        tap_1_m1 * tap_1_m1 + tap_m1_m1 * tap_m1_m1) / 9.0;
-            vec3 vsd = sqrt(max(vm2 - vm1 * vm1, vec3(0.0)));
-            vec3 vh = clamp(texture(u_history, v_uv).rgb,
-                            vm1 - vsd * VG, vm1 + vsd * VG);
-            c = mix(c, vh, VB);
+                        tap_1_m1 * tap_1_m1 + tap_m1_m1 * tap_m1_m1) * 0.1111111;
+            vec3 vsd = sqrt(max(vm2 - vm1 * vm1, ZERO3));
+            vec3 vh = clamp(history, vm1 - vsd, vm1 + vsd);
+            c = mix(c, mix(c, vh, 0.6), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_MITCHELL_KERNEL_SMOOTH
         {
-            const float MB = 0.3333333;
-            const float MB2 = 0.5;
-            float mc0 = 1.0 - MB / 3.0;
-            float mc1 = MB / 6.0;
-            vec3 ms = (texture(u_input, v_uv + vec2(1.0, 0.0) * inv).rgb +
-                       texture(u_input, v_uv + vec2(-1.0, 0.0) * inv).rgb +
-                       texture(u_input, v_uv + vec2(0.0, 1.0) * inv).rgb +
-                       texture(u_input, v_uv + vec2(0.0, -1.0) * inv).rgb);
-            vec3 mf = (c * mc0 + ms * mc1) / max(mc0 + mc1 * 4.0, 0.0001);
-            c = mix(mf, texture(u_history, v_uv).rgb, MB2);
+            const float MN_W_C  = 0.79012346;
+            const float MN_W_AX = 0.04938272;
+            const float MN_W_DI = 0.00308642;
+            const float MN_W_SUM = MN_W_C + 4.0 * MN_W_AX + 4.0 * MN_W_DI;
+            const float MN_W_NORM = 1.0 / MN_W_SUM;
+            vec3 ms = (c * MN_W_C + cross_sum * MN_W_AX + corner_sum * MN_W_DI) * MN_W_NORM;
+            c = mix(c, mix(ms, history, 0.5), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_YCOCG_CLIP_SMOOTH
         {
-            const float FB = 1.0;
-            const float FC = 2.0;
-            const float FD = 0.7;
-            float fb = FB * res_scale;
-            vec3 fh = ycocg_encode(texture(u_history, v_uv).rgb);
+            vec3 fh = ycocg_encode(history);
             vec3 fu = ycocg_encode(c);
-            vec3 fe = ycocg_encode(texture(u_input, v_uv + vec2(fb, 0.0) * inv).rgb);
-            vec3 fw = ycocg_encode(texture(u_input, v_uv + vec2(-fb, 0.0) * inv).rgb);
-            vec3 fn = ycocg_encode(texture(u_input, v_uv + vec2(0.0, fb) * inv).rgb);
-            vec3 fs = ycocg_encode(texture(u_input, v_uv + vec2(0.0, -fb) * inv).rgb);
+            vec3 fe = ycocg_encode(tap_1_0);
+            vec3 fw = ycocg_encode(tap_m1_0);
+            vec3 fn = ycocg_encode(tap_0_1);
+            vec3 fs = ycocg_encode(tap_0_m1);
             vec3 fmn = min(fu, min(min(fe, fw), min(fn, fs)));
             vec3 fmx = max(fu, max(max(fe, fw), max(fn, fs)));
             vec3 fcl = clamp(fh, fmn, fmx);
             vec3 fdc = abs(fh - fcl);
-            float ff = 1.0 - clamp((fdc.x + fdc.y + fdc.z) * FC, 0.0, 1.0);
-            c = ycocg_decode(mix(fu, fcl, FD * ff));
+            float ff = 1.0 - clamp((fdc.x + fdc.y + fdc.z) * 2.0, 0.0, 1.0);
+            c = mix(c, ycocg_decode(mix(fu, fcl, 0.7 * ff)), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_BILATERAL_HISTORY_SMOOTH
         {
-            const float BB = 0.5;
-            const float BS3 = 0.05;
-            vec3 bh = texture(u_history, v_uv).rgb;
-            vec3 be = texture(u_history, v_uv + vec2(1.0, 0.0) * inv).rgb;
-            vec3 bw = texture(u_history, v_uv + vec2(-1.0, 0.0) * inv).rgb;
-            vec3 bn = texture(u_history, v_uv + vec2(0.0, 1.0) * inv).rgb;
-            vec3 bs = texture(u_history, v_uv + vec2(0.0, -1.0) * inv).rgb;
-            vec3 bca = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) / 5.0;
-            vec3 bha = (bh + be + bw + bn + bs) / 5.0;
+            vec3 bca = (c + cross_sum) * 0.2;
+            vec3 bha = (history + hist_e + hist_w + hist_n + hist_s) * 0.2;
             vec3 bd = bca - bha;
-            float bsm = exp(-dot(bd, bd) / max(BS3, 0.0001));
-            c = mix(c, bh, BB * bsm);
+            float bsm = 1.0 / (1.0 + dot(bd, bd) * 20.0);
+            c = mix(c, mix(c, history, 0.5 * bsm), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_PERCEPTUAL_CHROMA_SMOOTH
         {
-            const float PL = 0.4;
-            const float PC = 0.7;
             vec3 pu = perc_ycc(c);
-            vec3 ph = perc_ycc(texture(u_history, v_uv).rgb);
-            c = perc_rgb(mix(pu, ph, vec3(PL, PC, PC)));
+            vec3 ph = perc_ycc(history);
+            c = mix(c, perc_rgb(mix(pu, ph, vec3(0.4, 0.7, 0.7))), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_FREQUENCY_SPLIT_SMOOTH
         {
-            const float FL = 0.7;
-            const float FH = 0.2;
-            vec3 flo = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) / 5.0;
+            vec3 flo = (c + cross_sum) * 0.2;
             vec3 fhi = c - flo;
-            vec3 fhh = texture(u_history, v_uv).rgb;
-            vec3 fhl = (fhh +
-                        texture(u_history, v_uv + vec2(1.0, 0.0) * inv).rgb +
-                        texture(u_history, v_uv + vec2(-1.0, 0.0) * inv).rgb +
-                        texture(u_history, v_uv + vec2(0.0, 1.0) * inv).rgb +
-                        texture(u_history, v_uv + vec2(0.0, -1.0) * inv).rgb) / 5.0;
-            vec3 fhhi = fhh - fhl;
-            c = mix(flo, fhl, FL) + mix(fhi, fhhi, FH);
+            vec3 fhl = (history + hist_e + hist_w + hist_n + hist_s) * 0.2;
+            vec3 fhhi = history - fhl;
+            vec3 ff_out = mix(flo, fhl, 0.7) + mix(fhi, fhhi, 0.2);
+            c = mix(c, ff_out, hist_valid);
         }
     #endif
 
     #ifdef ENABLE_HORN_SCHUNCK_SMOOTH
         {
-            const float OS = 1.0;
-            const float OM = 4.0;
-            const float OB = 0.5;
-            float om = OM * res_scale;
-            float ol = (c.r + c.g + c.b) / 3.0;
-            float ox = ((tap_1_0.r + tap_1_0.g + tap_1_0.b) -
-                        (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
-            float oy = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
-                        (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 oh = texture(u_history, v_uv).rgb;
-            float ot = ol - (oh.r + oh.g + oh.b) / 3.0;
-            float od = ox * ox + oy * oy;
-            vec2 of2 = vec2(ox, oy) * (-ot / max(od, 0.0001));
-            of2 = clamp(of2 * OS, vec2(-om), vec2(om));
-            c = mix(c, texture(u_history, v_uv + of2 * inv).rgb, OB);
+            float om = 4.0 * res_scale;
+            float ol = dot(c, LUMA_AVG);
+            float ot = ol - dot(history, LUMA_AVG);
+            float od = lgrad_x * lgrad_x * 0.25 + lgrad_y * lgrad_y * 0.25 + 0.001;
+            vec2 of2 = clamp(vec2(lgrad_x * 0.5, lgrad_y * 0.5) * (-ot / od), vec2(-om), vec2(om));
+            vec3 hs_out = mix(c, texture(u_history, v_uv + of2 * inv).rgb, 0.5);
+            c = mix(c, hs_out, hist_valid);
         }
     #endif
 
     #ifdef ENABLE_CONVERGENT_ACCUMULATE
         {
-            const float AN = 0.1;
-            const float AX = 0.85;
-            const float AR = 15.0;
-            vec3 ah = texture(u_history, v_uv).rgb;
-            vec3 ad = c - ah;
+            vec3 ad = c - history;
             float am = dot(ad, ad);
-            float as2 = 1.0 - clamp(am * AR, 0.0, 1.0);
-            c = mix(c, ah, mix(AN, AX, as2 * as2));
+            float as2 = 1.0 - clamp(am * 15.0, 0.0, 1.0);
+            float aw = mix(0.1, 0.85, as2 * as2);
+            c = mix(c, mix(c, history, aw), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_DUALWARP_FLOW_SMOOTH
         {
-            const float FS2 = 1.0;
-            const float FM2 = 4.0;
-            const float FB2 = 0.6;
-            const float FD2 = 0.12;
-            const float FT = 0.5;
-            float fm = FM2 * res_scale;
-            float fl = (c.r + c.g + c.b) / 3.0;
-            float fx = ((tap_1_0.r + tap_1_0.g + tap_1_0.b) -
-                        (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
-            float fy = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
-                        (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 fh = texture(u_history, v_uv).rgb;
-            float ft2 = fl - (fh.r + fh.g + fh.b) / 3.0;
-            float fd2 = fx * fx + fy * fy;
-            vec2 ff = vec2(fx, fy) * (-ft2 / max(fd2 + 0.001, 0.0001));
-            ff = clamp(ff * FS2, vec2(-fm), vec2(fm));
-            vec2 fw = v_uv + ff * inv;
-            vec3 fa = texture(u_history, fw).rgb;
-            float rl = (fa.r + fa.g + fa.b) / 3.0;
+            float fm = 4.0 * res_scale;
+            float fl = dot(c, LUMA_AVG);
+            float fx = lgrad_x * 0.5;
+            float fy = lgrad_y * 0.5;
+            float ft2 = fl - dot(history, LUMA_AVG);
+            float fd2 = fx * fx + fy * fy + 0.001;
+            vec2 ff = clamp(vec2(fx, fy) * (-ft2 / fd2), vec2(-fm), vec2(fm));
+            vec2 fw_uv = v_uv + ff * inv;
+            vec3 fa = texture(u_history, fw_uv).rgb;
+            vec3 fa_e = texture(u_history, fw_uv + vec2( inv.x, 0.0)).rgb;
+            vec3 fa_w = texture(u_history, fw_uv + vec2(-inv.x, 0.0)).rgb;
+            vec3 fa_n = texture(u_history, fw_uv + vec2(0.0,  inv.y)).rgb;
+            vec3 fa_s = texture(u_history, fw_uv + vec2(0.0, -inv.y)).rgb;
+            float fx_w = dot(fa_e - fa_w, LUMA_AVG) * 0.5;
+            float fy_w = dot(fa_n - fa_s, LUMA_AVG) * 0.5;
+            float rl = dot(fa, LUMA_AVG);
             float rt = rl - fl;
-            vec2 rv = vec2(fx, fy) * (-rt / max(fd2 + 0.001, 0.0001));
-            rv = clamp(rv * FS2, vec2(-fm), vec2(fm));
-            float fe = length(ff + rv);
-            float fc2 = 1.0 - clamp(fe / max(FT, 0.0001), 0.0, 1.0);
+            float rd2 = fx_w * fx_w + fy_w * fy_w + 0.001;
+            vec2 rv = clamp(vec2(fx_w, fy_w) * (-rt / rd2), vec2(-fm), vec2(fm));
+            vec2 sum_flow = ff + rv;
+            float fc2 = 1.0 - clamp(dot(sum_flow, sum_flow) * 4.0, 0.0, 1.0);
             vec2 fhf = ff * 0.5 * inv;
             vec3 wc = texture(u_input, v_uv - fhf).rgb;
-            vec3 wh = texture(u_history, v_uv + fhf).rgb;
-            vec3 fmn = min(c, min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1)));
-            vec3 fmx = max(c, max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1)));
-            wh = clamp(wh, fmn, fmx);
+            vec3 wh = clamp(texture(u_history, v_uv + fhf).rgb, min(box_min_x, c), max(box_max_x, c));
             vec3 dd = abs(wc - wh);
-            float ds = step(FD2, max(dd.r, max(dd.g, dd.b)));
-            c = mix(mix(wc, wh, FB2 * fc2), c, ds);
+            float ds = step(0.12, max(dd.r, max(dd.g, dd.b)));
+            vec3 dw_out = mix(mix(wc, wh, 0.6 * fc2), c, ds);
+            c = mix(c, dw_out, hist_valid);
         }
     #endif
 
     #ifdef ENABLE_VARIANCE_FLOW_ACCUMULATE
         {
-            const float DN = 0.05;
-            const float DX = 0.85;
-            const float DM = 12.0;
-            const float DL = 8.0;
-            const float DV = 1.25;
-            float dl = (c.r + c.g + c.b) / 3.0;
-            float dx = ((tap_1_0.r + tap_1_0.g + tap_1_0.b) -
-                        (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
-            float dy = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
-                        (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 dh = texture(u_history, v_uv).rgb;
-            float dt = dl - (dh.r + dh.g + dh.b) / 3.0;
-            float dd2 = dx * dx + dy * dy;
-            vec2 df = vec2(dx, dy) * (-dt / max(dd2 + 0.001, 0.0001));
-            df = clamp(df, vec2(-4.0 * res_scale), vec2(4.0 * res_scale));
+            float dl = dot(c, LUMA_AVG);
+            float dx = lgrad_x * 0.5;
+            float dy = lgrad_y * 0.5;
+            float dt = dl - dot(history, LUMA_AVG);
+            float dd2 = dx * dx + dy * dy + 0.001;
+            vec2 df = clamp(vec2(dx, dy) * (-dt / dd2),
+                            vec2(-4.0 * res_scale), vec2(4.0 * res_scale));
             vec3 dw = texture(u_history, v_uv + df * inv).rgb;
-            vec3 dm1 = (c + tap_1_0 + tap_m1_0 + tap_0_1 + tap_0_m1) / 5.0;
+            vec3 dm1 = (c + cross_sum) * 0.2;
             vec3 dm2 = (c * c + tap_1_0 * tap_1_0 + tap_m1_0 * tap_m1_0 +
-                        tap_0_1 * tap_0_1 + tap_0_m1 * tap_0_m1) / 5.0;
-            vec3 ds = sqrt(max(dm2 - dm1 * dm1, vec3(0.0)));
-            vec3 dc = clamp(dw, dm1 - ds * DV, dm1 + ds * DV);
-            vec3 dcd = abs(dw - dc);
+                        tap_0_1 * tap_0_1 + tap_0_m1 * tap_0_m1) * 0.2;
+            vec3 ds_ = sqrt(max(dm2 - dm1 * dm1, ZERO3));
+            vec3 dc_ = clamp(dw, dm1 - ds_ * 1.25, dm1 + ds_ * 1.25);
+            vec3 dcd = abs(dw - dc_);
             float dca = max(dcd.r, max(dcd.g, dcd.b));
-            float dmc = 1.0 - clamp(length(df) * DM / max(res_scale, 0.0001), 0.0, 1.0);
-            float dlc = 1.0 - clamp(abs(dot(c, LUMA_BT709) - dot(dc, LUMA_BT709)) * DL, 0.0, 1.0);
+            float dmc = 1.0 - clamp(dot(df, df) * 144.0 / max(res_scale * res_scale, 0.0001), 0.0, 1.0);
+            float dlc = 1.0 - clamp(abs(dot(c, LUMA_BT709) - dot(dc_, LUMA_BT709)) * 8.0, 0.0, 1.0);
             float dcf = dmc * dlc * (1.0 - clamp(dca * 8.0, 0.0, 1.0));
-            c = mix(c, dc, mix(DN, DX, dcf * dcf));
+            float vw = mix(0.05, 0.85, dcf * dcf);
+            c = mix(c, mix(c, dc_, vw), hist_valid);
         }
     #endif
 
     #ifdef ENABLE_EDGE_RECONSTRUCT_SMOOTH
         {
-            const float EB2 = 0.6;
-            const float EN = 0.08;
-            const float EM2 = 10.0;
-            const float ES2 = 2.0;
-            const float ED = 1.0;
-            float egx = dot(tap_1_0 - tap_m1_0, LUMA_BT709);
-            float egy = dot(tap_0_1 - tap_0_m1, LUMA_BT709);
-            float egm = sqrt(egx * egx + egy * egy);
-            vec2 egd = vec2(-egy, egx) / max(egm, 0.0001);
-            float eds = ED * res_scale;
-            vec3 edp = texture(u_input, v_uv + egd * eds * inv).rgb;
-            vec3 edn = texture(u_input, v_uv - egd * eds * inv).rgb;
+            float egx = dot(grad_x_rgb, LUMA_BT709);
+            float egy = dot(grad_y_rgb, LUMA_BT709);
+            float egm2 = egx * egx + egy * egy;
+            vec2 egd = vec2(-egy, egx) / max(sqrt(egm2), 0.0001);
+            vec3 edp = texture(u_input, v_uv + egd * inv).rgb;
+            vec3 edn = texture(u_input, v_uv - egd * inv).rgb;
             vec3 eda = (edp + edn) * 0.5;
-            float edw = clamp(egm * ES2, 0.0, 1.0);
+            float edw = clamp(egm2 * 4.0, 0.0, 1.0);
             vec3 esp = mix(c, eda, edw * 0.3);
-            float el = (c.r + c.g + c.b) / 3.0;
-            float elx = ((tap_1_0.r + tap_1_0.g + tap_1_0.b) -
-                         (tap_m1_0.r + tap_m1_0.g + tap_m1_0.b)) / 6.0;
-            float ely = ((tap_0_1.r + tap_0_1.g + tap_0_1.b) -
-                         (tap_0_m1.r + tap_0_m1.g + tap_0_m1.b)) / 6.0;
-            vec3 eh = texture(u_history, v_uv).rgb;
-            float elt = el - (eh.r + eh.g + eh.b) / 3.0;
-            float edn2 = elx * elx + ely * ely;
-            vec2 ef = vec2(elx, ely) * (-elt / max(edn2 + 0.001, 0.0001));
-            ef = clamp(ef, vec2(-4.0 * res_scale), vec2(4.0 * res_scale));
-            vec3 ew = texture(u_history, v_uv + ef * inv).rgb;
-            vec3 emn = min(c, min(min(tap_1_0, tap_m1_0), min(tap_0_1, tap_0_m1)));
-            vec3 emx = max(c, max(max(tap_1_0, tap_m1_0), max(tap_0_1, tap_0_m1)));
-            ew = clamp(ew, emn, emx);
-            vec3 edf = abs(esp - ew);
-            float emo = max(edf.r, max(edf.g, edf.b));
-            float ecf = 1.0 - clamp(emo * EM2, 0.0, 1.0);
-            float eoe = clamp(egm * 4.0, 0.0, 1.0);
-            float ewt = mix(EB2, EN, 1.0 - ecf) * mix(1.0, 0.5, eoe);
-            c = mix(esp, ew, ewt);
+            float el = dot(c, LUMA_AVG);
+            float elt = el - dot(history, LUMA_AVG);
+            float edn2 = lgrad_x * lgrad_x * 0.25 + lgrad_y * lgrad_y * 0.25 + 0.001;
+            vec2 ef = clamp(vec2(lgrad_x * 0.5, lgrad_y * 0.5) * (-elt / edn2),
+                            vec2(-4.0 * res_scale), vec2(4.0 * res_scale));
+            vec3 ew_ = clamp(texture(u_history, v_uv + ef * inv).rgb, min(box_min_x, c), max(box_max_x, c));
+            vec3 edf = abs(esp - ew_);
+            float ecf = 1.0 - clamp(max(edf.r, max(edf.g, edf.b)) * 10.0, 0.0, 1.0);
+            float eoe = clamp(egm2 * 16.0, 0.0, 1.0);
+            float ewt = mix(0.6, 0.08, 1.0 - ecf) * mix(1.0, 0.5, eoe);
+            c = mix(c, mix(esp, ew_, ewt), hist_valid);
         }
     #endif
 
-    #ifdef ENABLE_SURFACE_DISOCCLUSION_GUARD
+    #ifdef ENABLE_TEMPORAL_STABILIZER
         {
-            const float DT2 = 0.15;
-            const float DB2 = 0.5;
-            vec3 dh = texture(u_history, v_uv).rgb;
-            vec3 dd = abs(c - dh);
-            float dm = max(dd.r, max(dd.g, dd.b));
-            c = mix(c, dh, DB2 * (1.0 - step(DT2, dm)));
-        }
-    #endif
-
-    #ifdef ENABLE_CONVERGENT_DETAIL_RECOVERY
-        {
-            const float TS = 0.3;
-            const float TM2 = 10.0;
-            vec3 th = texture(u_history, v_uv).rgb;
-            vec3 td = th - c;
-            float tm = dot(td, td);
-            float tw = TS * (1.0 - clamp(tm * TM2, 0.0, 1.0));
-            c = clamp(mix(c, th + td * tw, tw), 0.0, 1.0);
-        }
-    #endif
-
-    #ifdef ENABLE_GAUSSIAN_GRAIN
-        {
-            const float GS2 = 0.05;
-            const float GA = 10.0;
-            float g1 = max(fract(sin(dot(v_uv, vec2(12.9898, 78.233)) + u_time * GA) * 43758.5453), 0.0001);
-            float g2 = fract(sin(dot(v_uv, vec2(39.3468, 11.135)) + u_time * GA) * 24634.6345);
-            float gg = sqrt(-2.0 * log(g1)) * cos(6.2831853 * g2);
-            c = c + vec3(gg) * GS2;
-        }
-    #endif
-
-    #ifdef ENABLE_CHROMATIC_ABERRATION
-        {
-            const float CA = 0.005;
-            vec2 cd = (v_uv - vec2(0.5)) * CA;
-            c.r = texture(u_input, v_uv + cd).r;
-            c.b = texture(u_input, v_uv - cd).b;
-        }
-    #endif
-
-    #ifdef ENABLE_RED_HALATION
-        {
-            const float HR = 3.0;
-            const float HT = 0.6;
-            const float HS2 = 0.5;
-            float hr = HR * res_scale;
-            vec3 hs = texture(u_input, v_uv + vec2(hr, 0.0) * inv).rgb +
-                      texture(u_input, v_uv - vec2(hr, 0.0) * inv).rgb +
-                      texture(u_input, v_uv + vec2(0.0, hr) * inv).rgb +
-                      texture(u_input, v_uv - vec2(0.0, hr) * inv).rgb;
-            c.r = c.r + max(hs.r * 0.25 - HT, 0.0) * HS2;
-        }
-    #endif
-
-    #ifdef ENABLE_ANAMORPHIC_STREAK
-        {
-            const float AW = 6.0;
-            const float AT = 0.7;
-            const float AI = 0.3;
-            float aw = AW * res_scale;
-            vec3 as2 = vec3(0.0);
-            for (int aj = 1; aj <= 6; aj++) {
-                float ai = float(aj);
-                vec2 ao = vec2(ai * aw, 0.0) * inv;
-                vec3 aa = max(texture(u_input, v_uv + ao).rgb - vec3(AT), vec3(0.0));
-                vec3 ab = max(texture(u_input, v_uv - ao).rgb - vec3(AT), vec3(0.0));
-                as2 += (aa + ab) / ai;
-            }
-            c = c + as2 * AI * vec3(0.4, 0.5, 1.0);
-        }
-    #endif
-
-    #ifdef ENABLE_RADIAL_VIGNETTE
-        {
-            const float VI = 0.3;
-            const float VO = 0.8;
-            const float VS2 = 0.5;
-            c = c * (1.0 - smoothstep(VI, VO, length(v_uv - vec2(0.5))) * VS2);
-        }
-    #endif
-
-    #ifdef ENABLE_CINEMATIC_LETTERBOX
-        {
-            const float LR = 2.35;
-            float la = u_resolution.x / max(u_resolution.y, 0.0001);
-            float lv = clamp(la / LR, 0.0, 1.0);
-            float lb = (1.0 - lv) * 0.5;
-            c = mix(c, vec3(0.0), step(v_uv.y, lb) + step(1.0 - lb, v_uv.y));
-        }
-    #endif
-
-    #ifdef ENABLE_ORDERED_DITHER
-        {
-            const float DS3 = 0.01;
-            int di = int(mod(floor(gl_FragCoord.x), 4.0)) + int(mod(floor(gl_FragCoord.y), 4.0)) * 4;
-            float dt = (dither_cell(di) + 0.5) / 16.0 - 0.5;
-            c = c + vec3(dt) * DS3;
+            vec3 dd_t = abs(c - history);
+            float dm_t = max(dd_t.r, max(dd_t.g, dd_t.b));
+            vec3 c1 = mix(c, history, 0.5 * (1.0 - step(0.15, dm_t)));
+            vec3 td_t = history - c1;
+            float tw_t = 0.3 * (1.0 - clamp(dot(td_t, td_t) * 10.0, 0.0, 1.0));
+            vec3 c2 = clamp(mix(c1, history + td_t * tw_t, tw_t), 0.0, 1.0);
+            c = mix(c, c2, hist_valid);
         }
     #endif
 
@@ -2334,15 +2122,7 @@ void main() {
     #endif
 
     #ifdef ENABLE_ACES_TONEMAP
-        {
-            const float A = 2.51;
-            const float B = 0.03;
-            const float C = 2.43;
-            const float D = 0.59;
-            const float E = 0.14;
-            c = clamp((c * (A * c + vec3(B))) / max(c * (C * c + vec3(D)) + vec3(E), vec3(0.0001)),
-                      0.0, 1.0);
-        }
+        c = clamp((c * (2.51 * c + 0.03)) / max(c * (2.43 * c + 0.59) + 0.14, vec3(0.0001)), 0.0, 1.0);
     #endif
 
     #ifdef ENABLE_AGX_TONEMAP
@@ -2350,87 +2130,67 @@ void main() {
             const mat3 AGX_IN = mat3(
                 0.842479062253094, 0.0423282422610123, 0.0423756549057051,
                 0.0784335999999992, 0.878468636469772, 0.0784336,
-                0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+                0.0792237451477643, 0.0791661274605434, 0.879142973793104
+            );
             const mat3 AGX_OUT = mat3(
-                1.19687900512017, -0.0528968517574562, -0.0529716355144438,
-                -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
-                -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
-            const float MN = -12.47393;
-            const float MX = 4.026069;
+                 1.19687900512017,  -0.0528968517574562, -0.0529716355144438,
+                -0.0980208811401368, 1.15190312990417,   -0.0980434501171241,
+                -0.0990297440797205, -0.0989611768448433, 1.15107367264116
+            );
             vec3 av = AGX_IN * c;
-            av = clamp(log2(max(av, vec3(0.0001))), MN, MX);
-            av = (av - MN) / (MX - MN);
+            av = clamp(log2(max(av, vec3(0.0001))), -12.47393, 4.026069);
+            av = (av + 12.47393) * 0.06059967;
             av = agx_contrast(av);
             c = clamp(AGX_OUT * av, 0.0, 1.0);
         }
     #endif
 
     #ifdef ENABLE_REINHARD_TONEMAP
-        {
-            const float RW = 4.0;
-            c = c * (vec3(1.0) + c / max(RW * RW, 0.0001)) / (vec3(1.0) + c);
-        }
+        c = c * (ONE3 + c * 0.0625) / (ONE3 + c);
     #endif
 
     #ifdef ENABLE_HABLE_TONEMAP
         {
-            const float HW = 11.2;
-            const float HE = 2.0;
-            vec3 hn = hable_map(c * HE);
-            vec3 hd = hable_map(vec3(HW));
-            c = clamp(hn / max(hd, vec3(0.0001)), 0.0, 1.0);
+            const float HABLE_W_INV = 1.0 / 0.81243248;
+            c = clamp(hable_map(c * 2.0) * HABLE_W_INV, 0.0, 1.0);
         }
     #endif
 
     #ifdef ENABLE_LOTTES_TONEMAP
         {
-            const float LA = 1.6;
-            const float LB = 0.977;
-            const float LC = 0.18;
-            const float LD = 0.93;
             vec3 lx = max(c, vec3(0.0001));
-            vec3 la = pow(lx, vec3(LA));
-            c = la / max(pow(lx, vec3(LA * LD)) * LB + vec3(LC), vec3(0.0001));
+            vec3 la = pow(lx, vec3(1.6));
+            c = la / max(la * pow(lx, vec3(-0.112)) * 0.977 + vec3(0.18), vec3(0.0001));
         }
     #endif
 
     #ifdef ENABLE_UCHIMURA_TONEMAP
-        c = vec3(uchi_map(c.r), uchi_map(c.g), uchi_map(c.b));
+        c = uchi_map(c);
     #endif
 
     #ifdef ENABLE_TONY_TONEMAP
         {
-            const float TO = 0.155;
-            const float TS2 = 1.19;
-            vec3 tx = max(c, vec3(0.0));
-            c = clamp(tx / (tx + vec3(TO)) * TS2, 0.0, 1.0);
+            vec3 tx = max(c, ZERO3);
+            c = clamp(tx / (tx + vec3(0.155)) * 1.19, 0.0, 1.0);
         }
     #endif
 
     #ifdef ENABLE_KHRONOS_TONEMAP
         {
-            const float KSC = 0.76;
-            const float KDS = 0.15;
             float kx = min(c.r, min(c.g, c.b));
             float ko = mix(0.04, kx - 6.25 * kx * kx, step(kx, 0.08));
             c -= ko;
             float kp = max(c.r, max(c.g, c.b));
-            float kd = 1.0 - KSC;
-            float knp = 1.0 - kd * kd / max(kp + kd - KSC, 0.0001);
-            float kgate = step(KSC, kp);
+            float knp = 1.0 - 0.0576 / max(kp + 0.24 - 0.76, 0.0001);
+            float kgate = step(0.76, kp);
             c *= mix(1.0, knp / max(kp, 0.0001), kgate);
-            float kg = 1.0 - 1.0 / max(KDS * (kp - knp) + 1.0, 0.0001);
+            float kg = 1.0 - 1.0 / max(0.15 * (kp - knp) + 1.0, 0.0001);
             c = clamp(mix(c, vec3(knp), kgate * kg), 0.0, 1.0);
         }
     #endif
 
     #ifdef ENABLE_NEUTRAL_WHITE_BALANCE
-        {
-            const float NR = 0.985;
-            const float NG = 1.000;
-            const float NB = 1.030;
-            c = c * vec3(NR, NG, NB);
-        }
+        c = c * vec3(0.985, 1.0, 1.030);
     #endif
 
     #ifdef ENABLE_WARM_TEMPERATURE
@@ -2443,135 +2203,100 @@ void main() {
 
     #ifdef ENABLE_SATURATION_CONTRAST_GRADE
         {
-            const float GS = 1.1;
-            const float GC = 1.05;
-            const float GB = 0.0;
             float gl = dot(c, LUMA_BT601);
-            c = mix(vec3(gl), c, GS);
-            c = (c - vec3(0.5)) * GC + vec3(0.5) + vec3(GB);
+            c = mix(vec3(gl), c, 1.1);
+            c = (c - HALF3) * 1.05 + HALF3;
         }
     #endif
 
     #ifdef ENABLE_LEVELS_REMAP
-        {
-            const float IB = 0.02;
-            const float IW = 0.98;
-            const float OB = 0.0;
-            const float OW = 1.0;
-            c = clamp((c - vec3(IB)) / max(vec3(IW - IB), vec3(0.0001)), 0.0, 1.0) *
-                (OW - OB) + vec3(OB);
-        }
+        c = clamp((c - vec3(0.02)) * 1.04166667, 0.0, 1.0);
     #endif
 
     #ifdef ENABLE_GAMMA_CORRECT
-        {
-            const float GV = 1.1;
-            c = pow(max(c, vec3(0.0)), vec3(1.0 / max(GV, 0.0001)));
-        }
+        c = pow(max(c, ZERO3), vec3(0.9090909));
     #endif
 
     #ifdef ENABLE_VIBRANCE_BOOST
         {
-            const float VA = 0.5;
             float vmx = max(c.r, max(c.g, c.b));
             float vmn = min(c.r, min(c.g, c.b));
-            float vst = vmx - vmn;
             float vl = dot(c, LUMA_BT601);
-            c = mix(vec3(vl), c, 1.0 + VA * (1.0 - vst));
+            c = mix(vec3(vl), c, 1.0 + 0.5 * (1.0 - (vmx - vmn)));
         }
     #endif
 
     #ifdef ENABLE_HSL_TRANSFORM
         {
-            const float HH = 0.0;
-            const float HS2 = 1.1;
-            const float HL = 1.0;
             float hmx = max(c.r, max(c.g, c.b));
             float hmn = min(c.r, min(c.g, c.b));
-            float hl = (hmx + hmn) * 0.5;
             float hd = hmx - hmn;
-            float is_r = step(hmx - c.r, 0.0);
-            float is_g = step(hmx - c.g, 0.0) * (1.0 - is_r);
-            float is_b = (1.0 - is_r) * (1.0 - is_g);
-            float hh_r = mod((c.g - c.b) / max(hd, 0.0001), 6.0);
-            float hh_g = (c.b - c.r) / max(hd, 0.0001) + 2.0;
-            float hh_b = (c.r - c.g) / max(hd, 0.0001) + 4.0;
-            float hh = (hh_r * is_r + hh_g * is_g + hh_b * is_b) / 6.0;
-            hh = mix(hh, 0.0, step(hd, 0.0001));
-            hh = fract(hh + HH);
-            float hs = clamp(hd / max(1.0 - abs(2.0 * hl - 1.0), 0.0001) * HS2, 0.0, 1.0);
-            float hl2 = clamp(hl * HL, 0.0, 1.0);
+            float hl = (hmx + hmn) * 0.5;
+            vec3 d3 = vec3(hmx) - c;
+            float invd = 1.0 / max(hd, 1e-5);
+            vec3 hcand = vec3(
+                (d3.g - d3.b) * invd,
+                (d3.b - d3.r) * invd + 2.0,
+                (d3.r - d3.g) * invd + 4.0
+            );
+            float pick_r = step(hmx - 1e-5, c.r);
+            float pick_g = step(hmx - 1e-5, c.g) * (1.0 - pick_r);
+            float pick_b = (1.0 - pick_r) * (1.0 - pick_g);
+            float hue_raw = hcand.x * pick_r + hcand.y * pick_g + hcand.z * pick_b;
+            float hue = fract(hue_raw * 0.16666667) * step(1e-5, hd);
+            float hs = clamp(hd / max(1.0 - abs(2.0 * hl - 1.0), 0.0001) * 1.1, 0.0, 1.0);
+            float hl2 = clamp(hl, 0.0, 1.0);
             float hc = (1.0 - abs(2.0 * hl2 - 1.0)) * hs;
-            float hx = hc * (1.0 - abs(mod(hh * 6.0, 2.0) - 1.0));
             float hm = hl2 - hc * 0.5;
-            vec3 hr = vec3(hc, hx, 0.0);
-            hr = mix(hr, vec3(hx, hc, 0.0), step(1.0, hh * 6.0));
-            hr = mix(hr, vec3(0.0, hc, hx), step(2.0, hh * 6.0));
-            hr = mix(hr, vec3(0.0, hx, hc), step(3.0, hh * 6.0));
-            hr = mix(hr, vec3(hx, 0.0, hc), step(4.0, hh * 6.0));
-            hr = mix(hr, vec3(hc, 0.0, hx), step(5.0, hh * 6.0));
-            c = hr + vec3(hm);
+            vec3 hbase = clamp(abs(mod(hue * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+            c = hbase * hc + vec3(hm);
         }
     #endif
 
     #ifdef ENABLE_SPLIT_TONE
         {
-            const float SB2 = 0.3;
             float sl = dot(c, LUMA_BT601);
-            c = c + mix(vec3(-0.1, 0.0, 0.1), vec3(0.1, 0.0, -0.1),
-                        smoothstep(0.0, 1.0, sl)) * SB2;
+            c = c + mix(vec3(-0.1, 0.0, 0.1), vec3(0.1, 0.0, -0.1), smoothstep(0.0, 1.0, sl)) * 0.3;
         }
     #endif
 
     #ifdef ENABLE_LIFT_GAMMA_GAIN
-        {
-            const float LL = 0.03;
-            const float LG2 = 1.0;
-            const float LN = 1.0;
-            c = pow(max(c * LN + vec3(LL) * (vec3(1.0) - c), vec3(0.0)),
-                    vec3(1.0 / max(LG2, 0.0001)));
-        }
+        c = max(c + vec3(0.03) * (ONE3 - c), ZERO3);
     #endif
 
     #ifdef ENABLE_HERMITE_CURVES
         {
-            const float CS = 0.5;
-            vec3 cv = c * c * (vec3(3.0) - 2.0 * c);
-            c = mix(c, cv, CS);
+            vec3 cv = c * c * (3.0 - 2.0 * c);
+            c = mix(c, cv, 0.5);
         }
     #endif
 
     #ifdef ENABLE_RED_CHANNEL_CURVE
         {
-            const float RS = 0.5;
             float rv = c.r * c.r * (3.0 - 2.0 * c.r);
-            c.r = mix(c.r, rv, RS);
+            c.r = mix(c.r, rv, 0.5);
         }
     #endif
 
     #ifdef ENABLE_GREEN_CHANNEL_CURVE
         {
-            const float GS2 = 0.5;
             float gv = c.g * c.g * (3.0 - 2.0 * c.g);
-            c.g = mix(c.g, gv, GS2);
+            c.g = mix(c.g, gv, 0.5);
         }
     #endif
 
     #ifdef ENABLE_BLUE_CHANNEL_CURVE
         {
-            const float BS = 0.5;
             float bv = c.b * c.b * (3.0 - 2.0 * c.b);
-            c.b = mix(c.b, bv, BS);
+            c.b = mix(c.b, bv, 0.5);
         }
     #endif
 
     #ifdef ENABLE_TRIZONE_COLOR_BALANCE
         {
-            const float SE = 0.4;
-            const float HS3 = 0.6;
             float cl = dot(c, LUMA_BT601);
-            float cs = 1.0 - smoothstep(0.0, SE, cl);
-            float ch = smoothstep(HS3, 1.0, cl);
+            float cs = 1.0 - smoothstep(0.0, 0.4, cl);
+            float ch = smoothstep(0.6, 1.0, cl);
             c = c + vec3(-0.03, 0.01, 0.02) * cs + vec3(0.02, 0.0, -0.02) * ch;
         }
     #endif
@@ -2606,12 +2331,7 @@ void main() {
     #endif
 
     #ifdef ENABLE_DYNAMIC_RANGE_CRUSH
-        {
-            const float DB = 0.03;
-            const float DW = 0.97;
-            c = (clamp(c, vec3(DB), vec3(DW)) - vec3(DB)) /
-                max(vec3(DW - DB), vec3(0.0001));
-        }
+        c = (clamp(c, vec3(0.03), vec3(0.97)) - vec3(0.03)) * 1.06382979;
     #endif
 
     #ifdef ENABLE_DUOTONE_MAP
@@ -2622,68 +2342,55 @@ void main() {
     #endif
 
     #ifdef ENABLE_COLOR_WASH_TINT
-        {
-            c = mix(c, vec3(0.5, 0.5, 0.6), 0.2);
-        }
+        c = mix(c, vec3(0.5, 0.5, 0.6), 0.2);
     #endif
 
     #ifdef ENABLE_POSTERIZE_QUANTIZE
-        {
-            const float PL = 8.0;
-            c = floor(c * max(PL, 1.0)) / max(PL, 1.0);
-        }
+        c = floor(c * 8.0) * 0.125;
     #endif
 
     #ifdef ENABLE_BLEACH_BYPASS
         {
-            const float BB2 = 0.7;
             float bl = dot(c, LUMA_BT601);
             vec3 bb = 2.0 * c * vec3(bl);
-            vec3 bs = vec3(1.0) - 2.0 * (vec3(1.0) - c) * (vec3(1.0) - vec3(bl));
-            c = mix(c, mix(bb, bs, step(0.5, bl)), BB2);
+            vec3 bs = ONE3 - 2.0 * (ONE3 - c) * (ONE3 - vec3(bl));
+            c = mix(c, mix(bb, bs, step(0.5, bl)), 0.7);
         }
     #endif
 
     #ifdef ENABLE_TECHNICOLOR_PROCESS
         {
-            const float TS3 = 0.5;
-            const float TT = 0.7;
-            vec3 tn = vec3(1.0) - c;
-            vec3 tp = vec3(tn.g + tn.b, tn.r + tn.b, tn.r + tn.g) * TS3;
-            c = mix(c, clamp(vec3(1.0) - tp * 0.5, 0.0, 1.0), TT);
+            vec3 tn = ONE3 - c;
+            vec3 tp = vec3(tn.g + tn.b, tn.r + tn.b, tn.r + tn.g) * 0.5;
+            c = mix(c, clamp(ONE3 - tp * 0.5, 0.0, 1.0), 0.7);
         }
     #endif
 
     #ifdef ENABLE_MIDPOINT_CONTRAST
-        {
-            c = clamp((c - vec3(0.5)) * 1.5 + vec3(0.5), 0.0, 1.0);
-        }
+        c = clamp((c - HALF3) * 1.5 + HALF3, 0.0, 1.0);
     #endif
 
     #ifdef ENABLE_COLOR_INVERT
-        c = vec3(1.0) - c;
+        c = ONE3 - c;
     #endif
 
     #ifdef ENABLE_LUMINANCE_GRAYSCALE
-        {
-            float gl = dot(c, LUMA_BT709);
-            c = vec3(gl);
-        }
+        c = vec3(dot(c, LUMA_BT709));
     #endif
 
-    #ifdef ENABLE_PROTANOPIA_SIMULATE
+    #ifdef ENABLE_PROTANOPIA_SIMULATION
         c = vec3(dot(c, vec3(0.567, 0.433, 0.0)),
                  dot(c, vec3(0.558, 0.442, 0.0)),
                  dot(c, vec3(0.0, 0.242, 0.758)));
     #endif
 
-    #ifdef ENABLE_DEUTERANOPIA_SIMULATE
+    #ifdef ENABLE_DEUTERANOPIA_SIMULATION
         c = vec3(dot(c, vec3(0.625, 0.375, 0.0)),
                  dot(c, vec3(0.7, 0.3, 0.0)),
                  dot(c, vec3(0.0, 0.3, 0.7)));
     #endif
 
-    #ifdef ENABLE_TRITANOPIA_SIMULATE
+    #ifdef ENABLE_TRITANOPIA_SIMULATION
         c = vec3(dot(c, vec3(0.95, 0.05, 0.0)),
                  dot(c, vec3(0.0, 0.433, 0.567)),
                  dot(c, vec3(0.0, 0.475, 0.525)));
@@ -2719,6 +2426,281 @@ void main() {
         }
     #endif
 
-    frag_out = vec4(c, 1.0);
+    #ifdef ENABLE_GAUSSIAN_GRAIN
+        {
+            float g1 = max(hash21(v_uv + vec2(u_time * 10.0)), 0.0001);
+            float g2 = hash21(v_uv + vec2(u_time * 10.0 + 7.31));
+            float gg = sqrt(-2.0 * log(g1)) * fast_cos(6.2831853 * g2);
+            c = c + vec3(gg) * 0.05;
+        }
+    #endif
+
+    #ifdef ENABLE_RED_HALATION
+        {
+            const float HAL_THR = 0.6;
+            float hal_sum_r = tap_1_1.r + tap_m1_1.r + tap_1_m1.r + tap_m1_m1.r;
+            c.r = c.r + max(hal_sum_r * 0.25 - HAL_THR, 0.0) * 0.5;
+        }
+    #endif
+
+    #ifdef ENABLE_ANAMORPHIC_STREAK
+        {
+            const vec3 ANA_THR = vec3(0.7);
+            float ax_unit = 6.0 * res_scale * inv.x;
+            float as_x  = ax_unit * 1.5;
+            float as_x2 = ax_unit * 3.5;
+            float as_x3 = ax_unit * 5.5;
+            vec3 a1p = texture(u_input, v_uv + vec2( as_x, 0.0)).rgb;
+            vec3 a1m = texture(u_input, v_uv + vec2(-as_x, 0.0)).rgb;
+            vec3 a2p = texture(u_input, v_uv + vec2( as_x2, 0.0)).rgb;
+            vec3 a2m = texture(u_input, v_uv + vec2(-as_x2, 0.0)).rgb;
+            vec3 a3p = texture(u_input, v_uv + vec2( as_x3, 0.0)).rgb;
+            vec3 a3m = texture(u_input, v_uv + vec2(-as_x3, 0.0)).rgb;
+            vec3 as2 = (max(a1p - ANA_THR, ZERO3) + max(a1m - ANA_THR, ZERO3)) * 1.5
+                     + (max(a2p - ANA_THR, ZERO3) + max(a2m - ANA_THR, ZERO3)) * 0.58333333
+                     + (max(a3p - ANA_THR, ZERO3) + max(a3m - ANA_THR, ZERO3)) * 0.36666667;
+            c = c + as2 * 0.3 * vec3(0.4, 0.5, 1.0);
+        }
+    #endif
+
+    #ifdef ENABLE_RADIAL_VIGNETTE
+        {
+            vec2 vd = v_uv - HALF2;
+            c = c * (1.0 - smoothstep(0.09, 0.64, dot(vd, vd)) * 0.5);
+        }
+    #endif
+
+    #ifdef ENABLE_CINEMATIC_LETTERBOX
+        {
+            float la = u_resolution.x / max(u_resolution.y, 0.0001);
+            float lv = clamp(la * 0.42553191, 0.0, 1.0);
+            float lb = (1.0 - lv) * 0.5;
+            c = mix(c, ZERO3, step(v_uv.y, lb) + step(1.0 - lb, v_uv.y));
+        }
+    #endif
+
+    #ifdef ENABLE_ORDERED_DITHER
+        c = c + vec3(bayer_signed(gl_FragCoord.xy)) * 0.01;
+    #endif
+
+    c = clamp(c, 0.0, 1.0);
+
+    #ifdef ENABLE_PS1_SIMULATION
+        c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.025) * 0.03225806;
+    #endif
+
+    #ifdef ENABLE_SATURN_SIMULATION
+        {
+            float sat_lum = dot(c, LUMA_BT601);
+            float sat_qlum = floor(sat_lum * 12.0 + 0.5) * 0.08333333;
+            c = c * (sat_qlum / max(sat_lum, 0.0001));
+            c = c * 0.85;
+            float sat_g = dot(c, LUMA_BT601);
+            c = mix(vec3(sat_g), c, 0.75);
+            c = c * vec3(1.05, 0.97, 0.85);
+            c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.02) * 0.03225806;
+        }
+    #endif
+
+    #ifdef ENABLE_N64_SIMULATION
+        {
+            vec2 n64_d2 = v_uv - HALF2;
+            c = mix(c, vec3(0.6, 0.65, 0.75), smoothstep(0.04, 0.5625, dot(n64_d2, n64_d2)) * 0.25);
+            c = c * vec3(1.06, 1.02, 0.9);
+            c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.015) * 0.03225806;
+        }
+    #endif
+
+    #ifdef ENABLE_DREAMCAST_SIMULATION
+        {
+            c = c * 1.15;
+            float dc_lum = dot(c, LUMA_BT601);
+            c = mix(vec3(dc_lum), c, 1.12);
+            c = c + vec3(smoothstep(0.65, 0.95, dc_lum)) * 0.08;
+        }
+    #endif
+
+    #ifdef ENABLE_PS2_SIMULATION
+        {
+            const vec3 PS2_THR = vec3(0.6);
+            float ps2_scanline = floor(gl_FragCoord.y);
+            float ps2_sc = 0.97 + 0.03 * (abs(fract(ps2_scanline * 0.5) - 0.5) * 4.0 - 1.0);
+            c = c * ps2_sc;
+            c = c + max(c - PS2_THR, ZERO3) * 0.15;
+        }
+    #endif
+
+    #ifdef ENABLE_XBOX_SIMULATION
+        {
+            float xb_lum = dot(c, LUMA_BT601);
+            c = c + vec3(smoothstep(0.6, 0.9, xb_lum)) * 0.1;
+            c = c + max(c - HALF3, ZERO3) * 0.12;
+            c = c * vec3(1.02, 1.04, 0.96);
+        }
+    #endif
+
+    #ifdef ENABLE_PSP_SIMULATION
+        {
+            float psp_lum = dot(c, LUMA_BT601);
+            float psp_qlum = floor(psp_lum * 16.0 + 0.5) * 0.0625;
+            c = c * (psp_qlum / max(psp_lum, 0.0001));
+            c = mix(vec3(0.06), vec3(0.92), c);
+            float psp_dl = dot(c, LUMA_BT601);
+            float psp_dark_q = mix(8.0, 31.0, smoothstep(0.0, 0.3, psp_dl));
+            c = floor(c * psp_dark_q + 0.5) / psp_dark_q;
+            c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.018) * 0.03225806;
+            float psp_g = dot(c, LUMA_BT601);
+            c = mix(vec3(psp_g), c, 0.88);
+        }
+    #endif
+
+    #ifdef ENABLE_PS3_SIMULATION
+        {
+            float ps3_lum = dot(c, LUMA_BT601);
+            c = c * smoothstep(0.0, 0.06, ps3_lum);
+            c = c * vec3(0.98, 1.0, 1.03);
+        }
+    #endif
+
+    #ifdef ENABLE_XBOX360_SIMULATION
+        {
+            float x3_s1 = 1.0 - smoothstep(0.0, 0.003, abs(v_uv.y - 0.333));
+            float x3_s2 = 1.0 - smoothstep(0.0, 0.003, abs(v_uv.y - 0.667));
+            c = c + vec3(0.015) * (x3_s1 + x3_s2);
+            float x3_lum = dot(c, LUMA_BT601);
+            float x3_steps = mix(256.0, 24.0, smoothstep(0.5, 0.9, x3_lum));
+            float x3_qlum = floor(x3_lum * x3_steps + 0.5) / x3_steps;
+            c = c * (x3_qlum / max(x3_lum, 0.0001));
+            c = c + vec3(0.04) * (ONE3 - c);
+            c = c * vec3(1.03, 1.01, 0.96);
+            float x3_g = dot(c, LUMA_BT601);
+            c = mix(vec3(x3_g), c, 0.92);
+            c = c + vec3(smoothstep(0.55, 0.85, x3_g)) * 0.06;
+        }
+    #endif
+
+    #ifdef ENABLE_CRT_SIMULATION
+        {
+            float cp = fract(v_uv.x * u_resolution.x * 0.3333333);
+            float mr = mix(0.7, 1.0, step(cp, 0.3333333));
+            float mg = mix(0.7, 1.0, step(0.3333333, cp) * step(cp, 0.6666666));
+            float mb = mix(0.7, 1.0, step(0.6666666, cp));
+            float sc = 1.0 - 0.25 * (0.5 + 0.5 * (abs(fract(v_uv.y * u_resolution.y * 0.5) - 0.5) * 4.0 - 1.0));
+            float crt_bright = 1.0 + fast_sin(u_time * 1.7) * 0.04 + fast_sin(u_time * 0.3) * 0.02;
+            c = c * vec3(mr, mg, mb) * sc * 1.08 * crt_bright;
+        }
+    #endif
+
+    #ifdef ENABLE_PHOSPHOR_AMBER
+        c = vec3(1.0, 0.75, 0.3) * dot(c, LUMA_BT601) * 1.1;
+    #endif
+
+    #ifdef ENABLE_PHOSPHOR_GREEN
+        c = vec3(0.2, 1.0, 0.2) * dot(c, LUMA_BT601) * 1.1;
+    #endif
+
+    #ifdef ENABLE_PHOSPHOR_RED
+        c = vec3(1.0, 0.2, 0.2) * dot(c, LUMA_BT601) * 1.1;
+    #endif
+
+    #ifdef ENABLE_SCANLINE_DARKEN
+        {
+            float tri = abs(fract(v_uv.y * u_resolution.y * 0.5) - 0.5) * 2.0;
+            c = c * (1.0 - 0.3 * tri);
+        }
+    #endif
+
+    #ifdef ENABLE_OLED_SIMULATION
+        {
+            float ol = dot(c, LUMA_BT601);
+            float oc = smoothstep(0.0, 0.05, ol);
+            c = (c + (c - vec3(ol)) * 0.1) * oc;
+        }
+    #endif
+
+    #ifdef ENABLE_VHS_SIMULATION
+        {
+            float vline = floor(v_uv.y * u_resolution.y);
+            float vhs_tn = hash21(vec2(vline, floor(u_time * 3.0) + 0.5)) - 0.5;
+            c = c + vec3(vhs_tn * 0.09);
+            float vn = hash21(v_uv + vec2(u_time * 10.0)) - 0.5;
+            c = c + vec3(vn) * 0.07;
+            float vhs_g = dot(c, LUMA_BT601);
+            c = mix(vec3(vhs_g), c, 0.7);
+            c = c * vec3(1.04, 1.0, 0.88);
+            float vhs_dh = hash21(vec2(vline, floor(u_time * 30.0)));
+            float vhs_dv = step(0.985, vhs_dh);
+            c = mix(c, vec3(step(0.5, fract(vhs_dh * 3.17))), vhs_dv * 0.7);
+        }
+    #endif
+
+    #ifdef ENABLE_LCD_SUBPIXEL
+        {
+            float lc = 3.0 * res_scale;
+            vec2 lp = fract(gl_FragCoord.xy / lc);
+            float lm = step(0.2, lp.x) * step(0.2, lp.y);
+            c = c * mix(0.6, 1.0, lm) * 1.1;
+        }
+    #endif
+
+    #ifdef ENABLE_FPS_HUD
+        {
+            float hs = 26.0 * res_scale;
+            #ifdef VULKAN_API
+                vec2 hu = v_uv;
+            #else
+                vec2 hu = vec2(v_uv.x, 1.0 - v_uv.y);
+            #endif
+            vec2 raw_hp = (hu - vec2(0.012)) * u_resolution / hs;
+            float in_x = step(-0.6, raw_hp.x) * step(raw_hp.x, 3.5);
+            float in_y = step(-0.6, raw_hp.y) * step(raw_hp.y, 1.6);
+            float in_box = in_x * in_y;
+            vec2 hp = raw_hp;
+            hp.x += (1.0 - hp.y) * 0.15;
+            float fps_clamped = clamp(u_fps, 0.0, 9999.0);
+            float fps_digit3 = mod(floor(fps_clamped * 0.001), 10.0);
+            float fps_digit2 = mod(floor(fps_clamped * 0.01), 10.0);
+            float fps_digit1 = mod(floor(fps_clamped * 0.1), 10.0);
+            float fps_digit0 = mod(floor(fps_clamped), 10.0);
+            float show3 = step(1.0, fps_digit3);
+            float show2 = step(1.0, fps_digit3 + fps_digit2);
+            float show1 = step(1.0, fps_digit3 + fps_digit2 + fps_digit1);
+            float d3 = mix(999.0, hud_digit(hp, fps_digit3), show3);
+            float d2 = mix(999.0, hud_digit(hp - vec2(0.7, 0.0), fps_digit2), show2);
+            float d1 = mix(999.0, hud_digit(hp - vec2(1.4, 0.0), fps_digit1), show1);
+            float d0 = hud_digit(hp - vec2(2.1, 0.0), fps_digit0);
+            float d_text = min(min(d3, d2), min(d1, d0));
+            float text_core = (1.0 - smoothstep(0.045, 0.075, d_text)) * in_box;
+            float text_glow = (1.0 - smoothstep(0.06, 0.35, d_text)) * in_box;
+            vec2 bg_d = abs(raw_hp - vec2(1.55, 0.45)) - vec2(1.4, 0.2);
+            float bg_dist = length(max(bg_d, 0.0)) + min(max(bg_d.x, bg_d.y), 0.0);
+            float bg_alpha = (1.0 - smoothstep(0.1, 0.5, bg_dist)) * 0.75 * in_box;
+            c = mix(c, vec3(0.01, 0.02, 0.05), bg_alpha);
+            c = mix(c, vec3(0.0, 0.5, 1.0), text_glow * 0.85);
+            c = mix(c, vec3(0.85, 0.95, 1.0), text_core);
+        }
+    #endif
+
+    #ifdef ENABLE_CROSSHAIR_OVERLAY
+        {
+            float cs = res_scale;
+            vec2 cp = abs(gl_FragCoord.xy - u_resolution * 0.5);
+            float in_box = step(max(cp.x, cp.y), 16.0 * cs);
+            float d_dot = max(0.0, length(cp) - 0.5 * cs);
+            vec2 pa_h = cp - vec2(4.0 * cs, 0.0);
+            float h_h = clamp(pa_h.x / (10.0 * cs), 0.0, 1.0);
+            float d_arm_h = length(pa_h - vec2(10.0 * cs * h_h, 0.0));
+            vec2 pa_v = cp - vec2(0.0, 4.0 * cs);
+            float h_v = clamp(pa_v.y / (10.0 * cs), 0.0, 1.0);
+            float d_arm_v = length(pa_v - vec2(0.0, 10.0 * cs * h_v));
+            float d_cross = min(d_dot, min(d_arm_h, d_arm_v));
+            float cross_core = (1.0 - smoothstep(0.5 * cs, 1.5 * cs, d_cross)) * in_box;
+            float cross_glow = (1.0 - smoothstep(1.0 * cs, 4.0 * cs, d_cross)) * in_box;
+            c = mix(c, vec3(0.0, 0.5, 1.0), cross_glow * 0.85);
+            c = mix(c, vec3(0.85, 0.95, 1.0), cross_core);
+        }
+    #endif
+
+    frag_out = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 "#;

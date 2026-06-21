@@ -25,13 +25,21 @@ made for the bones project are released under the GPL‑3.0‑or‑later
 license stated above; the algorithm descriptions and original works
 remain the intellectual property of their respective authors.
 
+Sections below follow the runtime effect order: geometric, denoise,
+anti‑aliasing, sharpening / local contrast, blur, image quality,
+temporal processing, exposure, tonemapping, white balance, colour
+grading, channel curves, colour balance, selective colour,
+stylization, accessibility, inline effects, hardware simulation,
+overlay.
+
 =======================================================================
 GEOMETRIC (UV WARP)
 =======================================================================
 
 polynomial_distort / barrel_undistort
-  Based on the Brown‑Conrady lens distortion model (radial distortion
-  coefficients k1, k2), widely used in OpenCV and camera calibration.
+  Based on the Brown‑Conrady radial lens distortion model
+  (widely used in OpenCV camera calibration). bones uses a
+  single‑term (k1) approximation rather than the full k1/k2 polynomial.
 
 fisheye_warp
   Employs an atan remapping to simulate a fisheye lens projection.
@@ -104,6 +112,131 @@ unsharp_mask
 local_contrast
   Per‑pixel contrast based on luminance ratio to neighborhood average;
   similar to DaVinci Resolve’s local contrast.
+
+=======================================================================
+BLUR
+=======================================================================
+
+gaussian_blur / box_blur / bokeh_blur / tilt_shift_blur / radial_blur
+  Standard convolution and sampling patterns. Public domain techniques.
+
+=======================================================================
+IMAGE QUALITY
+=======================================================================
+
+gradient_deband
+  Sampling‑based debanding inspired by mpv’s deband filter.
+
+threshold_bloom
+  Bright pixel glow via threshold and neighbourhood accumulation.
+
+ghost_flare
+  Lens flare ghost simulation – sampling along the vector from screen
+  centre to pixel.
+
+=======================================================================
+TEMPORAL PROCESSING
+=======================================================================
+
+neighborhood_clamp_aa (TAA clamp)
+  Based on the temporal anti‑aliasing technique described in
+  “High‑Quality Temporal Supersampling” by Brian Karis (SIGGRAPH 2014)
+  and “Filmic SMAA” by Jorge Jimenez (GDC 2016).
+
+motion_reject_denoise
+  Motion‑gated accumulation: heavily blend static pixels, snap on motion.
+
+motion_detect_blur
+  Motion‑blur by blending toward history proportional to per‑pixel change.
+
+constant_blend_smooth
+  Simple 50/50 temporal blend.
+
+shutter_angle_smooth
+  Physical camera shutter simulation (180° shutter angle).
+
+spline_interp_smooth
+  Cubic Hermite temporal reconstruction with extrapolated control
+  points. Related to the Catmull‑Rom family of cubic interpolants
+  (E. Catmull and R. Rom, 1974, "A Class of Local Interpolating Splines").
+
+variance_decay_smooth
+  Exponential IIR filter with variance‑based decay.
+
+dualrate_smooth
+  Dual‑rate adaptive filter (high blend for still areas, low for edges).
+
+luminance_gate_smooth
+  Luminance‑adaptive blending – more smoothing in dark regions.
+
+contrast_gate_smooth
+  Contrast‑adaptive blending based on local contrast magnitude.
+
+gradient_gate_smooth
+  Edge‑aware temporal blending using Sobel‑like gradient.
+
+sigma_clip_smooth
+  Variance clipping: history clamped to mean ± sigma of 3×3 neighbourhood.
+  Described by Salvi (2016) as the core of modern TAA.
+
+mitchell_kernel_smooth
+  Mitchell‑Netravali spatial reconstruction combined with temporal blend:
+  Don P. Mitchell and Arun N. Netravali (1988), “Reconstruction Filters
+  in Computer Graphics”.
+
+ycocg_clip_smooth
+  YCoCg colour‑space AABB clamp with confidence weighting.
+  Derived from AMD GPUOpen temporal stabilisation samples.
+  (MIT license)
+
+bilateral_history_smooth
+  Bilateral temporal filter comparing neighbourhood averages of current
+  and history frames.
+
+perceptual_chroma_smooth
+  YCbCr temporal blend with higher blend weight on chroma,
+  exploiting human vision’s lower chroma temporal resolution.
+
+frequency_split_smooth
+  Decompose into low/high frequency bands with separate blend weights.
+
+horn_schunck_smooth
+  Implements the Horn‑Schunck optical flow algorithm:
+  B. K. P. Horn and B. G. Schunck (1981), “Determining Optical Flow”.
+
+convergent_accumulate
+  Convergent temporal supersampling – gradually increases blend weight
+  as pixel stability increases, inspired by DLSS temporal accumulation.
+
+dualwarp_flow_smooth
+  Dual‑warp frame interpolation with flow consistency checking.
+  Inspired by AMD FidelityFX Frame Interpolation (part of FSR 3).
+  (MIT license)
+
+variance_flow_accumulate
+  Motion‑compensated temporal accumulation with variance clipping and
+  triple confidence gating. Based on the temporal supersampling papers
+  by Brian Karis (SIGGRAPH 2014) and Jorge Jimenez (GDC 2016).
+
+edge_reconstruct_smooth
+  Edge‑directed temporal reconstruction with directional spatial
+  reconstruction along edges, inspired by Intel XeSS DP4a fallback path.
+  Original XeSS is under the Intel Simplified Software License
+  (BSD‑like); bones uses only the described algorithm.
+
+convergent_detail_recovery (automatic)
+  Fused temporal stabilizer combining a motion gate that softens
+  history influence on large per‑pixel changes (a lightweight
+  disocclusion guard) with a pull toward the converged history
+  representation. Implemented as a single block that activates
+  automatically whenever any temporal mode is enabled.
+
+=======================================================================
+EXPOSURE
+=======================================================================
+
+linear_exposure
+  Fixed multiplier applied before tonemapping.
 
 =======================================================================
 TONEMAPPING
@@ -237,146 +370,11 @@ luminance_grayscale
 ACCESSIBILITY
 =======================================================================
 
-protanopia_simulate / deuteranopia_simulate / tritanopia_simulate
+protanopia_simulation / deuteranopia_simulation / tritanopia_simulation
   Colour vision deficiency simulation using 3×3 transformation matrices.
 
 protanopia_correct / deuteranopia_correct / tritanopia_correct
   Daltonization (correction) for red, green, or blue cone deficiencies.
-
-=======================================================================
-DISPLAY SIMULATION
-=======================================================================
-
-crt_simulation
-  Full CRT TV simulation: barrel distortion, RGB phosphor mask,
-  scanlines, brightness compensation.
-
-phosphor_amber / phosphor_green / phosphor_red
-  Monochrome phosphor CRT emulation (amber, green, red).
-
-scanline_darken
-  Horizontal scanline darkening only.
-
-oled_simulation
-  OLED near‑black crush and saturation boost.
-
-vhs_simulation
-  VHS tape degradation: horizontal jitter, chroma separation,
-  luma noise, vertical ripple.
-
-lcd_subpixel
-  Visible LCD subpixel grid overlay.
-
-=======================================================================
-IMAGE QUALITY
-=======================================================================
-
-gradient_deband
-  Sampling‑based debanding inspired by mpv’s deband filter.
-
-threshold_bloom
-  Bright pixel glow via threshold and neighbourhood accumulation.
-
-ghost_flare
-  Lens flare ghost simulation – sampling along the vector from screen
-  centre to pixel.
-
-=======================================================================
-TEMPORAL PROCESSING
-=======================================================================
-
-neighborhood_clamp_aa (TAA clamp)
-  Based on the temporal anti‑aliasing technique described in
-  “High‑Quality Temporal Supersampling” by Brian Karis (SIGGRAPH 2014)
-  and “Filmic SMAA” by Jorge Jimenez (GDC 2016).
-
-motion_reject_denoise
-  Motion‑gated accumulation: heavily blend static pixels, snap on motion.
-
-motion_detect_blur
-  Motion‑blur by blending toward history proportional to per‑pixel change.
-
-constant_blend_smooth
-  Simple 50/50 temporal blend.
-
-shutter_angle_smooth
-  Physical camera shutter simulation (180° shutter angle).
-
-spline_interp_smooth
-  Catmull‑Rom spline temporal interpolation:
-  E. Catmull and R. Rom (1974), “A Class of Local Interpolating Splines”.
-
-variance_decay_smooth
-  Exponential IIR filter with variance‑based decay.
-
-dualrate_smooth
-  Dual‑rate adaptive filter (high blend for still areas, low for edges).
-
-luminance_gate_smooth
-  Luminance‑adaptive blending – more smoothing in dark regions.
-
-contrast_gate_smooth
-  Contrast‑adaptive blending based on local contrast magnitude.
-
-gradient_gate_smooth
-  Edge‑aware temporal blending using Sobel‑like gradient.
-
-sigma_clip_smooth
-  Variance clipping: history clamped to mean ± sigma of 3×3 neighbourhood.
-  Described by Salvi (2016) as the core of modern TAA.
-
-mitchell_kernel_smooth
-  Mitchell‑Netravali spatial reconstruction combined with temporal blend:
-  Don P. Mitchell and Arun N. Netravali (1988), “Reconstruction Filters
-  in Computer Graphics”.
-
-ycocg_clip_smooth
-  YCoCg colour‑space AABB clamp with confidence weighting.
-  Derived from AMD GPUOpen temporal stabilisation samples.
-  (MIT license)
-
-bilateral_history_smooth
-  Bilateral temporal filter comparing neighbourhood averages of current
-  and history frames.
-
-perceptual_chroma_smooth
-  YCbCr temporal blend with higher blend weight on chroma,
-  exploiting human vision’s lower chroma temporal resolution.
-
-frequency_split_smooth
-  Decompose into low/high frequency bands with separate blend weights.
-
-horn_schunck_smooth
-  Implements the Horn‑Schunck optical flow algorithm:
-  B. K. P. Horn and B. G. Schunck (1981), “Determining Optical Flow”.
-
-convergent_accumulate
-  Convergent temporal supersampling – gradually increases blend weight
-  as pixel stability increases, inspired by DLSS temporal accumulation.
-
-dualwarp_flow_smooth
-  Dual‑warp frame interpolation with flow consistency checking.
-  Inspired by AMD FidelityFX Frame Interpolation (part of FSR 3).
-  (MIT license)
-
-variance_flow_accumulate
-  Motion‑compensated temporal accumulation with variance clipping and
-  triple confidence gating. Based on the temporal supersampling papers
-  by Brian Karis (SIGGRAPH 2014) and Jorge Jimenez (GDC 2016).
-
-edge_reconstruct_smooth
-  Edge‑directed temporal reconstruction with directional spatial
-  reconstruction along edges, inspired by Intel XeSS DP4a fallback path.
-  Original XeSS is under the Intel Simplified Software License
-  (BSD‑like); bones uses only the described algorithm.
-
-surface_disocclusion_guard
-  History rejection for disocclusion; similar to the disocclusion
-  handling in FSR 2 and DLSS 2.
-
-convergent_detail_recovery
-  Temporal sharpening – pulls the current frame toward the converged
-  history representation, unique to bones.
 
 =======================================================================
 INLINE EFFECTS
@@ -403,6 +401,95 @@ cinematic_letterbox
 
 ordered_dither
   Bayer 4×4 ordered dither pattern (Bayer, 1973).
+
+=======================================================================
+HARDWARE SIMULATION
+=======================================================================
+
+--- Console GPU simulation ---
+
+ps1_simulation
+  PlayStation 1 GPU simulation. Coarse UV grid quantization to
+  simulate GTE fixed‑point coordinate snapping, nearest‑neighbour
+  sampling behaviour, 15‑bit colour with Bayer 4×4 ordered dithering.
+
+saturn_simulation
+  Sega Saturn GPU simulation. Coarse pixel quantization and
+  luminance banding approximating gouraud shading interpolation,
+  a dark desaturated palette with warm brown shift, and 15‑bit
+  colour with dithering.
+
+n64_simulation
+  Nintendo 64 GPU simulation. UV grid quantization producing
+  low‑resolution softness, radial distance fog, and a warm
+  colour shift.
+
+dreamcast_simulation
+  Sega Dreamcast GPU simulation. Over‑bright colour response,
+  boosted saturation, and a smoothstep specular boost on bright areas.
+
+ps2_simulation
+  PlayStation 2 GPU simulation. Pixel quantization, soft scanline
+  modulation, and threshold bloom approximating GS overbright.
+
+xbox_simulation
+  Original Xbox GPU simulation. Highlight boost in bright regions,
+  midtone lift simulating crude bloom, plastic specular feel,
+  and a slight warm/green colour bias.
+
+psp_simulation
+  PlayStation Portable GPU simulation. UV phase quantization to
+  480×272 native resolution, LCD gamma washout (black floor near
+  6%, white ceiling near 92%), dark region banding via adaptive
+  quantization, and slight desaturation.
+
+ps3_simulation
+  PlayStation 3 GPU simulation. Sub‑HD render quantization
+  (about 72% native), crushed shadows from RSX gamma response,
+  and a cool colour shift.
+
+xbox360_simulation
+  Xbox 360 GPU simulation. eDRAM tiling seam at one‑third and
+  two‑thirds screen height, HDR gradient banding in bright regions
+  (adaptive quantization steps), lifted warm gamma, slight
+  desaturation, and a specular peak boost.
+
+--- Display simulation ---
+
+crt_simulation
+  CRT TV simulation: barrel distortion in the geometric stage,
+  RGB phosphor triad mask, scanline darkening, brightness
+  compensation, and a low‑frequency brightness pulsing in the
+  color stage. The pulsing replaces older time‑varying instability
+  effects so temporal history stays aligned.
+
+phosphor_amber / phosphor_green / phosphor_red
+  Monochrome phosphor CRT emulation (amber, green, red).
+
+scanline_darken
+  Horizontal scanline darkening only.
+
+oled_simulation
+  OLED near‑black crush and saturation boost.
+
+vhs_simulation
+  VHS tape degradation: deterministic horizontal ripple in the
+  geometric stage; per‑scanline tracking noise, full‑image luma
+  noise, chroma desaturation, warm colour shift, and occasional
+  dropout in the color stage.
+
+lcd_subpixel
+  Visible LCD subpixel grid overlay.
+
+=======================================================================
+OVERLAY
+=======================================================================
+
+fps_hud
+  Seven‑segment FPS counter rendered as a signed distance field.
+
+crosshair_overlay
+  Centred neon crosshair with glow and centre dot.
 
 =======================================================================
 EXTERNAL LICENSES FOR REFERENCE IMPLEMENTATIONS

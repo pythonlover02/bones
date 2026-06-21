@@ -151,7 +151,17 @@ If you only need the library and manifest (no launcher), for example, to wire Bo
 make integrated
 ```
 
-This builds the library and copies `VkLayer_bones.json` next to `libbones.so` in `target/release/`. Nothing is installed system‑wide. Your launcher is then responsible for setting `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to point at this build directory (or wherever you copy the two files). This decouples the manifest from the source layout, so your build output stays consistent even if the manifest is later moved into a subfolder.
+This builds the library and stages everything you need into `target/release/integrated/`:
+
+```
+target/release/integrated/
+├── libbones.so
+├── VkLayer_bones.json
+├── LICENSE
+└── dist.LICENSE
+```
+
+Nothing is installed system‑wide. Copy the contents of that directory wherever your launcher expects them, then set `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to point at the destination. Shipping the two license files alongside the binary keeps redistribution GPL compliant out of the box.
 
 ### Uninstalling:
 

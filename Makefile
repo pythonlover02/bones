@@ -3,9 +3,12 @@ DESTDIR  ?=
 BINDIR   := $(PREFIX)/bin
 LIBDIR   := $(PREFIX)/lib/bones
 
-TARGET   := target/release/libbones.so
-BIN      := target/release/bones
-MANIFEST := VkLayer_bones.json
+TARGET          := target/release/libbones.so
+BIN             := target/release/bones
+INTEGRATED_DIR  := target/release/integrated
+MANIFEST        := VkLayer_bones.json
+LICENSE         := LICENSE
+DIST_LICENSE    := dist.LICENSE
 
 CARGO    ?= cargo
 CONTAINER ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo podman)
@@ -55,9 +58,13 @@ install: check-root
 	install -Dm755 $(BIN) $(DESTDIR)$(BINDIR)/bones
 	install -Dm755 $(TARGET) $(DESTDIR)$(LIBDIR)/libbones.so
 	install -Dm644 $(MANIFEST) $(DESTDIR)$(LIBDIR)/VkLayer_bones.json
+	install -Dm644 $(LICENSE) $(DESTDIR)$(LIBDIR)/LICENSE
+	install -Dm644 $(DIST_LICENSE) $(DESTDIR)$(LIBDIR)/dist.LICENSE
 	@echo "  $(BINDIR)/bones"
 	@echo "  $(LIBDIR)/libbones.so"
 	@echo "  $(LIBDIR)/VkLayer_bones.json"
+	@echo "  $(LIBDIR)/LICENSE"
+	@echo "  $(LIBDIR)/dist.LICENSE"
 	@if command -v flatpak >/dev/null 2>&1 && \
 	   ls $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-*.flatpak >/dev/null 2>&1; then \
 	  echo "installing flatpak extensions..."; \
@@ -80,9 +87,22 @@ install: check-root
 
 integrated: all
 	@test -f $(TARGET) || { echo "missing $(TARGET) — build failed"; exit 1; }
-	@cp $(MANIFEST) $(dir $(TARGET))
-	@echo "  $(TARGET)"
-	@echo "  $(dir $(TARGET))$(MANIFEST)"
+	@test -f $(MANIFEST) || { echo "missing $(MANIFEST)"; exit 1; }
+	@test -f $(LICENSE) || { echo "missing $(LICENSE)"; exit 1; }
+	@test -f $(DIST_LICENSE) || { echo "missing $(DIST_LICENSE)"; exit 1; }
+	@rm -rf $(INTEGRATED_DIR)
+	@mkdir -p $(INTEGRATED_DIR)
+	@cp $(TARGET) $(INTEGRATED_DIR)/libbones.so
+	@cp $(MANIFEST) $(INTEGRATED_DIR)/$(MANIFEST)
+	@cp $(LICENSE) $(INTEGRATED_DIR)/$(LICENSE)
+	@cp $(DIST_LICENSE) $(INTEGRATED_DIR)/$(DIST_LICENSE)
+	@echo "integrated build ready in $(INTEGRATED_DIR)/:"
+	@echo "  $(INTEGRATED_DIR)/libbones.so"
+	@echo "  $(INTEGRATED_DIR)/$(MANIFEST)"
+	@echo "  $(INTEGRATED_DIR)/$(LICENSE)"
+	@echo "  $(INTEGRATED_DIR)/$(DIST_LICENSE)"
+	@echo
+	@echo "copy the contents of $(INTEGRATED_DIR)/ wherever your launcher expects them."
 
 remove uninstall: check-root
 	rm -f $(DESTDIR)$(BINDIR)/bones
@@ -133,6 +153,8 @@ flatpak:
 	  cp $(FLATPAK_SRCDIR)/bones-flatpak $(FLATPAK_WORKDIR)/stage/files/bin/bones-flatpak; \
 	  chmod +x $(FLATPAK_WORKDIR)/stage/files/bin/bones-flatpak; \
 	  cp $(MANIFEST) $(FLATPAK_WORKDIR)/stage/files/lib/VkLayer_bones.json; \
+	  cp $(LICENSE) $(FLATPAK_WORKDIR)/stage/files/lib/LICENSE; \
+	  cp $(DIST_LICENSE) $(FLATPAK_WORKDIR)/stage/files/lib/dist.LICENSE; \
 	  \
 	  cp $(FLATPAK_SRCDIR)/metadata.$$rt $(FLATPAK_WORKDIR)/metadata; \
 	  cp $(FLATPAK_SRCDIR)/metadata.$$rt $(FLATPAK_WORKDIR)/stage/metadata; \
@@ -171,4 +193,4 @@ flatpak-clean:
 
 clean:
 	$(CARGO) clean
-	rm -rf $(FLATPAK_OUTDIR)/*.flatpak $(FLATPAK_WORKDIR)
+	rm -rf $(FLATPAK_OUTDIR)/*.flatpak $(FLATPAK_WORKDIR) $(INTEGRATED_DIR)

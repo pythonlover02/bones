@@ -92,66 +92,66 @@ Effects run in a **fixed order** designed around three semantic stages: *render 
 
 ## Installation:
 
+Each Make target does one thing. Nothing builds implicitly except the build
+targets themselves.
+
+| Command           | What it does                                                              |
+|-------------------|---------------------------------------------------------------------------|
+| `make`            | Native cargo build → `target/release/{bones,libbones.so}`                 |
+| `make release`    | Same artifacts, built in a Debian Bookworm container (glibc 2.36)         |
+| `make integrated` | Stage `libbones.so` + manifest + licenses into `target/release/integrated/` (errors if not built) |
+| `make flatpak`    | Build `.flatpak` bundles for runtimes 23.08 / 24.08 / 25.08 (errors if not built) |
+| `sudo make install` | Install whatever currently exists in `target/` and `flatpak/`. **Never builds.** No-op if nothing is there. |
+| `sudo make remove` | Remove the launcher, library, manifest, system + user flatpak extension, and `~/.config/bones` |
+| `make clean`      | `cargo clean` + remove integrated/, flatpak/, container stamp             |
+| `make flatpak-clean` | Remove flatpak bundles and workdir only                                |
+
 ### Pre‑built binaries (if available):
 
-Download the latest release from the [Releases](../../releases) page, extract it, and from inside the extracted directory run:
+Download the latest release from the [Releases](../../releases) page, extract,
+and from inside the extracted directory:
 
 ```sh
 sudo make install
 ```
-
-This installs the `bones` launcher, `libbones.so`, the Vulkan layer manifest, and any bundled Flatpak extensions.
 
 ### Building from source:
 
 ```sh
 git clone https://github.com/pythonlover02/bones.git
 cd bones
-make
+make                 # native build
+# or:
+make release         # portable build in container (needs podman/docker)
+make flatpak         # optional: build flatpak extensions
+sudo make install    # install everything that was built
 ```
 
-Produces `target/release/bones` and `target/release/libbones.so`.
+### Install paths:
 
-### Portable release build:
-
-Builds the library inside a Debian Bookworm container (for maximum glibc compatibility) plus all Flatpak extensions. Requires `podman` or `docker`, `flatpak`, `ostree`,and `python3`.
-
-```sh
-make release
-```
-
-### Installing:
-
-Run as root after building:
-
-```sh
-sudo make install
-```
-
-| File | Default path |
-|------|--------------|
-| Launcher | `/usr/local/bin/bones` |
-| Library | `/usr/local/lib/bones/libbones.so` |
+| File                  | Default path                              |
+|-----------------------|-------------------------------------------|
+| Launcher              | `/usr/local/bin/bones`                    |
+| Library               | `/usr/local/lib/bones/libbones.so`        |
 | Vulkan layer manifest | `/usr/local/lib/bones/VkLayer_bones.json` |
-
-Library and manifest are installed together in `/usr/local/lib/bones/`; the launcher points the Vulkan loader at this directory at runtime, so no `ldconfig` step is needed.
 
 ```sh
 sudo make install PREFIX=/opt/bones    # change prefix
 sudo make install DESTDIR=./package    # stage into a directory (packaging)
 ```
 
-If Flatpak extensions were built beforehand (`make flatpak` or `make release`), they are installed per‑user for the invoking user as part of `sudo make install`.
+If you built flatpak bundles with `make flatpak` beforehand, `sudo make install`
+also installs them per-user for the invoking user. If you didn't, it skips that
+step silently.
 
 ### Integrated build (for Proton forks and custom launchers):
 
-If you only need the library and manifest (no launcher), for example, to wire Bones into a Proton fork own launch script, use:
-
 ```sh
+make           # build first
 make integrated
 ```
 
-This builds the library and stages everything you need into `target/release/integrated/`:
+Stages everything into `target/release/integrated/`:
 
 ```
 target/release/integrated/
@@ -161,7 +161,9 @@ target/release/integrated/
 └── dist.LICENSE
 ```
 
-Nothing is installed system‑wide. Copy the contents of that directory wherever your launcher expects them, then set `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to point at the destination. Shipping the two license files alongside the binary keeps redistribution GPL compliant out of the box.
+Nothing is installed system-wide. Copy the contents wherever your launcher
+expects them, then set `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and
+`VK_INSTANCE_LAYERS` to point at the destination.
 
 ### Uninstalling:
 
@@ -169,13 +171,16 @@ Nothing is installed system‑wide. Copy the contents of that directory wherever
 sudo make remove
 ```
 
-Removes the launcher, library, and manifest; uninstalls the Flatpak extension (system scope always, user scope for the invoking user); and removes `~/.config/bones`. If run directly as root without `sudo`, it prints the remaining `--user` cleanup commands, since it cannot determine which user Flatpak and config to clean.
+Removes launcher, library, manifest, system-scope flatpak extension, user-scope
+flatpak extension for the invoking user, and `~/.config/bones`. If run directly
+as root without `sudo` (no `SUDO_USER`), it skips the user-scope steps and
+prints the commands to run as your user.
 
 ### Cleaning build artifacts:
 
 ```sh
-make clean          # cargo clean + remove built Flatpak bundles and staging
-make flatpak-clean  # remove only Flatpak bundles
+make clean          # cargo clean + remove integrated/, flatpak/, container stamp
+make flatpak-clean  # remove only flatpak bundles + workdir
 ```
 
 ## Flatpak:
@@ -186,10 +191,10 @@ Extensions are built for runtime versions `23.08`, `24.08`, and `25.08`.
 
 ### Building the extensions:
 
-Requires `flatpak`, `ostree`, `python3`, and a completed `make`/`make release` build.
+Requires `flatpak`, `ostree`, `python3`, and a completed `make` or `make release` build. `make flatpak` errors out at parse time if `target/release/libbones.so` doesn't exist.
 
 ```sh
-make
+make            # or: make release
 make flatpak
 ```
 
@@ -200,8 +205,6 @@ org.freedesktop.Platform.VulkanLayer.bones-23.08.flatpak
 org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
 org.freedesktop.Platform.VulkanLayer.bones-25.08.flatpak
 ```
-
-`make release` builds all of these at once.
 
 ### Installing the extensions:
 

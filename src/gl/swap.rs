@@ -18,6 +18,8 @@ use crate::interpose::call_real_egl_swap_damage_khr;
 use crate::interpose::call_real_egl_terminate;
 use crate::interpose::call_real_glx_destroy_context;
 use crate::interpose::call_real_glx_swap;
+use crate::interpose::call_real_glx_swap_msc_oml;
+use crate::interpose::call_real_glx_copy_sub_buffer;
 use crate::watch::maybe_reload;
 
 use super::context::ctx_ready;
@@ -76,6 +78,48 @@ pub unsafe extern "C" fn glXSwapBuffers(dpy: *mut c_void, drawable: libc::c_ulon
     match want_postfx(ctx_key(), &ensure_settings(), &REGISTRY) {
         true => run_postfx_glx(dpy, drawable),
         false => call_real_glx_swap(dpy, drawable),
+    }
+}
+
+fn run_postfx_glx_oml(
+    dpy: *mut c_void, drawable: libc::c_ulong,
+    target_msc: i64, divisor: i64, remainder: i64,
+) -> i64 {
+    let (w, h) = call_glx_drawable_size(dpy, drawable);
+    run_postfx_at(ctx_key(), w, h);
+    call_real_glx_swap_msc_oml(dpy, drawable, target_msc, divisor, remainder)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glXSwapBuffersMscOML(
+    dpy: *mut c_void, drawable: libc::c_ulong,
+    target_msc: i64, divisor: i64, remainder: i64,
+) -> i64 {
+    maybe_reload();
+    match want_postfx(ctx_key(), &ensure_settings(), &REGISTRY) {
+        true => run_postfx_glx_oml(dpy, drawable, target_msc, divisor, remainder),
+        false => call_real_glx_swap_msc_oml(dpy, drawable, target_msc, divisor, remainder),
+    }
+}
+
+fn run_postfx_glx_copy_sub(
+    dpy: *mut c_void, drawable: libc::c_ulong,
+    x: i32, y: i32, width: i32, height: i32,
+) {
+    let (w, h) = call_glx_drawable_size(dpy, drawable);
+    run_postfx_at(ctx_key(), w, h);
+    call_real_glx_copy_sub_buffer(dpy, drawable, x, y, width, height);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glXCopySubBufferMESA(
+    dpy: *mut c_void, drawable: libc::c_ulong,
+    x: i32, y: i32, width: i32, height: i32,
+) {
+    maybe_reload();
+    match want_postfx(ctx_key(), &ensure_settings(), &REGISTRY) {
+        true => run_postfx_glx_copy_sub(dpy, drawable, x, y, width, height),
+        false => call_real_glx_copy_sub_buffer(dpy, drawable, x, y, width, height),
     }
 }
 

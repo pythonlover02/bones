@@ -16,6 +16,8 @@ use crate::util::cstr_to_str;
 
 pub(crate) type DlsymFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void;
 pub(crate) type GlxSwapFn = unsafe extern "C" fn(*mut c_void, libc::c_ulong);
+pub(crate) type GlxSwapMscFn = unsafe extern "C" fn(*mut c_void, libc::c_ulong, i64, i64, i64) -> i64;
+pub(crate) type GlxCopySubBufferFn = unsafe extern "C" fn(*mut c_void, libc::c_ulong, i32, i32, i32, i32);
 pub(crate) type EglSwapFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32;
 pub(crate) type EglSwapDamageFn = unsafe extern "C" fn(*mut c_void, *mut c_void, *const i32, i32) -> u32;
 pub(crate) type GpaFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
@@ -30,6 +32,8 @@ pub(crate) type EglTerminateFn = unsafe extern "C" fn(*mut c_void) -> u32;
 #[derive(Default)]
 pub(crate) struct Reals {
     pub(crate) glx_swap: OnceLock<Option<GlxSwapFn>>,
+    pub(crate) glx_swap_msc_oml: OnceLock<Option<GlxSwapMscFn>>,
+    pub(crate) glx_copy_sub_buffer: OnceLock<Option<GlxCopySubBufferFn>>,
     pub(crate) egl_swap: OnceLock<Option<EglSwapFn>>,
     pub(crate) egl_swap_damage_ext: OnceLock<Option<EglSwapDamageFn>>,
     pub(crate) egl_swap_damage_khr: OnceLock<Option<EglSwapDamageFn>>,
@@ -184,6 +188,51 @@ pub(crate) fn call_real_glx_swap(dpy: *mut c_void, drawable: libc::c_ulong) {
     match real_glx_swap() {
         Some(f) => unsafe { f(dpy, drawable) },
         None => log_at(LogLevel::Error, "glXSwapBuffers unavailable, frame dropped"),
+    }
+}
+
+pub(crate) fn real_glx_swap_msc_oml() -> Option<GlxSwapMscFn> {
+    *reals().glx_swap_msc_oml.get_or_init(|| {
+        let c = CString::new("glXSwapBuffersMscOML").unwrap_or_default();
+        let p = call_real_glx_gpa(c.as_ptr());
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, GlxSwapMscFn>(p) }),
+        }
+    })
+}
+
+pub(crate) fn call_real_glx_swap_msc_oml(
+    dpy: *mut c_void, drawable: libc::c_ulong,
+    target_msc: i64, divisor: i64, remainder: i64,
+) -> i64 {
+    match real_glx_swap_msc_oml() {
+        Some(f) => unsafe { f(dpy, drawable, target_msc, divisor, remainder) },
+        None => {
+            log_at(LogLevel::Error, "glXSwapBuffersMscOML unavailable, frame dropped");
+            0
+        }
+    }
+}
+
+pub(crate) fn real_glx_copy_sub_buffer() -> Option<GlxCopySubBufferFn> {
+    *reals().glx_copy_sub_buffer.get_or_init(|| {
+        let c = CString::new("glXCopySubBufferMESA").unwrap_or_default();
+        let p = call_real_glx_gpa(c.as_ptr());
+        match p.is_null() {
+            true => None,
+            false => Some(unsafe { mem::transmute::<*mut c_void, GlxCopySubBufferFn>(p) }),
+        }
+    })
+}
+
+pub(crate) fn call_real_glx_copy_sub_buffer(
+    dpy: *mut c_void, drawable: libc::c_ulong,
+    x: i32, y: i32, width: i32, height: i32,
+) {
+    match real_glx_copy_sub_buffer() {
+        Some(f) => unsafe { f(dpy, drawable, x, y, width, height) },
+        None => log_at(LogLevel::Error, "glXCopySubBufferMESA unavailable, frame dropped"),
     }
 }
 
@@ -353,6 +402,8 @@ pub(crate) fn hooked_symbol(name: &str) -> Option<*mut c_void> {
     use crate::gl::swap;
     match name {
         "glXSwapBuffers" => Some(swap::glXSwapBuffers as *mut c_void),
+        "glXSwapBuffersMscOML" => Some(swap::glXSwapBuffersMscOML as *mut c_void),
+        "glXCopySubBufferMESA" => Some(swap::glXCopySubBufferMESA as *mut c_void),
         "eglSwapBuffers" => Some(swap::eglSwapBuffers as *mut c_void),
         "eglSwapBuffersWithDamageEXT" => Some(swap::eglSwapBuffersWithDamageEXT as *mut c_void),
         "eglSwapBuffersWithDamageKHR" => Some(swap::eglSwapBuffersWithDamageKHR as *mut c_void),

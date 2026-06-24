@@ -17,6 +17,14 @@ use super::device::devs_get;
 use super::memory::create_offscreen_image;
 use super::pipeline::*;
 
+pub(crate) struct VkSubmitResources {
+    pub(crate) family: u32,
+    pub(crate) cmd_pool: vk::CommandPool,
+    pub(crate) cmd_bufs: Vec<vk::CommandBuffer>,
+    pub(crate) semaphores: Vec<vk::Semaphore>,
+    pub(crate) fences: Vec<vk::Fence>,
+}
+
 pub(crate) struct VkSwapState {
     pub(crate) device: vk::Device,
     pub(crate) images: Vec<vk::Image>,
@@ -39,10 +47,7 @@ pub(crate) struct VkSwapState {
     pub(crate) tex_history_mem: vk::DeviceMemory,
     pub(crate) tex_history_view: vk::ImageView,
     pub(crate) history_init: bool,
-    pub(crate) cmd_pool: vk::CommandPool,
-    pub(crate) cmd_bufs: Vec<vk::CommandBuffer>,
-    pub(crate) semaphores: Vec<vk::Semaphore>,
-    pub(crate) fences: Vec<vk::Fence>,
+    pub(crate) submit_res: Option<VkSubmitResources>,
     pub(crate) gen: i32,
 }
 
@@ -64,10 +69,6 @@ struct SwapStateBuilder {
     tex_history: vk::Image,
     tex_history_mem: vk::DeviceMemory,
     tex_history_view: vk::ImageView,
-    cmd_pool: vk::CommandPool,
-    semaphores: Vec<vk::Semaphore>,
-    fences: Vec<vk::Fence>,
-    cmd_bufs: Vec<vk::CommandBuffer>,
     desc_sets: Vec<vk::DescriptorSet>,
 }
 
@@ -114,15 +115,6 @@ impl Drop for SwapStateBuilder {
                 dev.device.free_memory(self.tex_history_mem, None);
             }
         }
-        if self.cmd_pool != vk::CommandPool::null() {
-            unsafe { dev.device.destroy_command_pool(self.cmd_pool, None); }
-        }
-        self.semaphores.iter().for_each(|s| if *s != vk::Semaphore::null() {
-            unsafe { dev.device.destroy_semaphore(*s, None); }
-        });
-        self.fences.iter().for_each(|f| if *f != vk::Fence::null() {
-            unsafe { dev.device.destroy_fence(*f, None); }
-        });
         self.framebuffers.iter().for_each(|fb| if *fb != vk::Framebuffer::null() {
             unsafe { dev.device.destroy_framebuffer(*fb, None); }
         });
@@ -311,10 +303,6 @@ pub(crate) fn build_swap_state(
         tex_history: vk::Image::null(),
         tex_history_mem: vk::DeviceMemory::null(),
         tex_history_view: vk::ImageView::null(),
-        cmd_pool: vk::CommandPool::null(),
-        semaphores: Vec::new(),
-        fences: Vec::new(),
-        cmd_bufs: Vec::new(),
         desc_sets: Vec::new(),
     };
 
@@ -405,41 +393,6 @@ pub(crate) fn build_swap_state(
 
     desc_sets.iter().for_each(|ds| write_descriptors(dev, *ds, sampler, tex_input_view, tex_history_view));
 
-    let cpci = vk::CommandPoolCreateInfo {
-        flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
-        queue_family_index: dev.qfam,
-        ..Default::default()
-    };
-    let cmd_pool = unsafe { dev.device.create_command_pool(&cpci, None) }.map_err(|_| ())?;
-    builder.cmd_pool = cmd_pool;
-
-    let cbai = vk::CommandBufferAllocateInfo {
-        command_pool: cmd_pool,
-        level: vk::CommandBufferLevel::PRIMARY,
-        command_buffer_count: images.len() as u32,
-        ..Default::default()
-    };
-    let cmd_bufs = unsafe { dev.device.allocate_command_buffers(&cbai) }.map_err(|_| ())?;
-    builder.cmd_bufs = cmd_bufs.clone();
-
-    let semaphores = images.iter()
-        .map(|_| unsafe { dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ())?;
-    builder.semaphores = semaphores.clone();
-
-    let fences = images.iter()
-        .map(|_| {
-            let fci = vk::FenceCreateInfo {
-                flags: vk::FenceCreateFlags::SIGNALED,
-                ..Default::default()
-            };
-            unsafe { dev.device.create_fence(&fci, None) }
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ())?;
-    builder.fences = fences.clone();
-
     let final_state = VkSwapState {
         device: dev_h,
         images,
@@ -462,10 +415,7 @@ pub(crate) fn build_swap_state(
         tex_history_mem: builder.tex_history_mem,
         tex_history_view: builder.tex_history_view,
         history_init: false,
-        cmd_pool: builder.cmd_pool,
-        cmd_bufs,
-        semaphores,
-        fences,
+        submit_res: None,
         gen: GENERATION.load(Ordering::Relaxed),
     };
 
@@ -484,10 +434,6 @@ pub(crate) fn build_swap_state(
     builder.tex_history = vk::Image::null();
     builder.tex_history_mem = vk::DeviceMemory::null();
     builder.tex_history_view = vk::ImageView::null();
-    builder.cmd_pool = vk::CommandPool::null();
-    builder.semaphores.clear();
-    builder.fences.clear();
-    builder.cmd_bufs.clear();
     builder.framebuffers.clear();
 
     Ok(final_state)
@@ -506,7 +452,10 @@ fn call_wait_all_fences(dev: &VkDevState, fences: &[vk::Fence]) {
 }
 
 fn try_rebuild_pipeline(dev: &VkDevState, st: &VkSwapState, spv: &[u32]) -> Result<vk::Pipeline, ()> {
-    call_wait_all_fences(dev, &st.fences);
+    match st.submit_res.as_ref() {
+        Some(r) => call_wait_all_fences(dev, &r.fences),
+        None => (),
+    }
     create_pipeline(dev, st.pipeline_layout, st.render_pass, st.extent, spv)
 }
 
@@ -531,12 +480,59 @@ pub(crate) fn check_rebuild_pipeline(dev: &VkDevState, st: &mut VkSwapState) {
     }
 }
 
-pub(crate) fn destroy_swap_state(dev: &VkDevState, st: &VkSwapState) {
+fn create_submit_resources(dev: &VkDevState, family: u32, count: usize) -> Result<VkSubmitResources, ()> {
+    let cpci = vk::CommandPoolCreateInfo {
+        flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+        queue_family_index: family,
+        ..Default::default()
+    };
+    let cmd_pool = unsafe { dev.device.create_command_pool(&cpci, None) }.map_err(|_| ())?;
+    let cbai = vk::CommandBufferAllocateInfo {
+        command_pool: cmd_pool,
+        level: vk::CommandBufferLevel::PRIMARY,
+        command_buffer_count: count as u32,
+        ..Default::default()
+    };
+    let cmd_bufs = unsafe { dev.device.allocate_command_buffers(&cbai) }.map_err(|_| ())?;
+    let semaphores = (0..count)
+        .map(|_| unsafe { dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) })
+        .collect::<Result<Vec<_>, _>>().map_err(|_| ())?;
+    let fences = (0..count)
+        .map(|_| unsafe { dev.device.create_fence(&vk::FenceCreateInfo { flags: vk::FenceCreateFlags::SIGNALED, ..Default::default() }, None) })
+        .collect::<Result<Vec<_>, _>>().map_err(|_| ())?;
+    Ok(VkSubmitResources { family, cmd_pool, cmd_bufs, semaphores, fences })
+}
+
+pub(crate) fn ensure_submit_resources(dev: &VkDevState, st: &mut VkSwapState, family: u32) -> bool {
+    let needs_new = match &st.submit_res {
+        Some(r) => r.family != family,
+        None => true,
+    };
+    match needs_new {
+        true => {
+            st.submit_res.take().into_iter().for_each(|r| destroy_submit_resources(dev, r));
+            match create_submit_resources(dev, family, st.images.len()) {
+                Ok(r) => { st.submit_res = Some(r); true }
+                Err(()) => { log_at(LogLevel::Error, "submit resource alloc failed for queue family"); false }
+            }
+        }
+        false => true,
+    }
+}
+
+fn destroy_submit_resources(dev: &VkDevState, r: VkSubmitResources) {
     unsafe {
         let _ = dev.device.device_wait_idle();
-        st.fences.iter().for_each(|f| dev.device.destroy_fence(*f, None));
-        st.semaphores.iter().for_each(|s| dev.device.destroy_semaphore(*s, None));
-        dev.device.destroy_command_pool(st.cmd_pool, None);
+        r.fences.iter().for_each(|f| dev.device.destroy_fence(*f, None));
+        r.semaphores.iter().for_each(|s| dev.device.destroy_semaphore(*s, None));
+        dev.device.destroy_command_pool(r.cmd_pool, None);
+    }
+}
+
+pub(crate) fn destroy_swap_state(dev: &VkDevState, st: &mut VkSwapState) {
+    st.submit_res.take().into_iter().for_each(|r| destroy_submit_resources(dev, r));
+    unsafe {
+        let _ = dev.device.device_wait_idle();
         dev.device.destroy_descriptor_pool(st.desc_pool, None);
         dev.device.destroy_sampler(st.sampler, None);
         dev.device.destroy_image_view(st.tex_input_view, None);

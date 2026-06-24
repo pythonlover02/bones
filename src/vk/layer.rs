@@ -23,6 +23,7 @@ use crate::watch::maybe_reload;
 
 use super::instance::*;
 use super::device::*;
+use super::device::QueueBinding;
 use super::swapchain::*;
 use super::present::*;
 
@@ -173,7 +174,7 @@ unsafe extern "system" fn bones_GetDeviceQueue(dev: vk::Device, qfam: u32, qidx:
     match devs_get(dev.as_raw()) {
         Some(d) => {
             let q = d.device.get_device_queue(qfam, qidx);
-            queue_dev_put(q.as_raw(), dev.as_raw());
+            queue_dev_put(q.as_raw(), QueueBinding { device_raw: dev.as_raw(), family: qfam });
             *out = q;
         }
         None => log_at(LogLevel::Warn, "GetDeviceQueue on unregistered device"),
@@ -184,7 +185,7 @@ unsafe extern "system" fn bones_GetDeviceQueue2(dev: vk::Device, info: *const vk
     match devs_get(dev.as_raw()) {
         Some(d) => {
             let q = d.device.get_device_queue2(&*info);
-            queue_dev_put(q.as_raw(), dev.as_raw());
+            queue_dev_put(q.as_raw(), QueueBinding { device_raw: dev.as_raw(), family: (*info).queue_family_index });
             *out = q;
         }
         None => log_at(LogLevel::Warn, "GetDeviceQueue2 on unregistered device"),
@@ -274,7 +275,7 @@ unsafe extern "system" fn vkDestroyDevice(dev: vk::Device, alloc: *const vk::All
     let st = devs_del(dev.as_raw());
     match st {
         Some(d) => {
-            removed.iter().for_each(|s| destroy_swap_state(&d, s));
+            removed.into_iter().for_each(|mut s| destroy_swap_state(&d, &mut s));
             d.device.destroy_device(alloc.as_ref());
         }
         None => (),
@@ -301,8 +302,8 @@ unsafe extern "system" fn vkDestroySwapchainKHR(
     pending_del(sc.as_raw());
     let st = swap_del(sc.as_raw());
     match (devs_get(dev.as_raw()), st) {
-        (Some(d), Some(s)) => {
-            destroy_swap_state(&d, &s);
+        (Some(d), Some(mut s)) => {
+            destroy_swap_state(&d, &mut s);
             (d.swap_fp.destroy_swapchain_khr)(dev, sc, alloc);
         }
         (Some(d), None) => (d.swap_fp.destroy_swapchain_khr)(dev, sc, alloc),
@@ -322,8 +323,8 @@ unsafe extern "system" fn vkQueuePresentKHR(queue: vk::Queue, info: *const vk::P
     maybe_reload();
     retry_pending_registrations();
     match (queue_owner(queue), present_has_fx(info, &ensure_settings(), &REGISTRY)) {
-        (Some(d), true) => run_vk_present_chain(&d, queue, info),
-        (Some(d), false) => call_real_queue_present(&d, queue, info),
+        (Some((d, fam)), true) => run_vk_present_chain(&d, fam, queue, info),
+        (Some((d, _)), false) => call_real_queue_present(&d, queue, info),
         (None, _) => vk::Result::ERROR_DEVICE_LOST,
     }
 }

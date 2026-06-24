@@ -15,11 +15,16 @@ pub(crate) struct VkDevState {
     pub(crate) mem_props: vk::PhysicalDeviceMemoryProperties,
     pub(crate) gdpa: vk::PFN_vkGetDeviceProcAddr,
     pub(crate) swap_fp: vk::KhrSwapchainFn,
-    pub(crate) qfam: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct QueueBinding {
+    pub(crate) device_raw: u64,
+    pub(crate) family: u32,
 }
 
 static DEVS: RwLock<Option<HashMap<u64, VkDevState>>> = RwLock::new(None);
-static QUEUE_TO_DEV: RwLock<Option<HashMap<u64, u64>>> = RwLock::new(None);
+static QUEUE_TO_DEV: RwLock<Option<HashMap<u64, QueueBinding>>> = RwLock::new(None);
 
 pub(crate) fn devs_get(h: u64) -> Option<VkDevState> {
     DEVS.read().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&h).cloned()))
@@ -40,54 +45,20 @@ pub(crate) fn devs_del(h: u64) -> Option<VkDevState> {
     DEVS.write().ok().and_then(|mut g| g.as_mut().and_then(|m| m.remove(&h)))
 }
 
-pub(crate) fn queue_dev_get(q: u64) -> Option<u64> {
+pub(crate) fn queue_dev_get(q: u64) -> Option<QueueBinding> {
     QUEUE_TO_DEV.read().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&q).copied()))
 }
 
-pub(crate) fn queue_dev_put(q: u64, d: u64) {
+pub(crate) fn queue_dev_put(q: u64, b: QueueBinding) {
     match QUEUE_TO_DEV.write() {
-        Ok(mut g) => { g.get_or_insert_with(HashMap::new).insert(q, d); }
+        Ok(mut g) => { g.get_or_insert_with(HashMap::new).insert(q, b); }
         Err(_) => (),
     }
 }
 
-fn fallback_dev() -> Option<VkDevState> {
-    DEVS.read().ok().and_then(|g| g.as_ref().and_then(|m| m.values().next().cloned()))
-}
-
-fn find_queue_in_devs(queue: vk::Queue) -> Option<(u64, VkDevState)> {
-    DEVS.read()
-        .ok()
-        .and_then(|g| g.as_ref().and_then(|m|
-            m.iter()
-                .find(|(_, d)| unsafe { d.device.get_device_queue(d.qfam, 0) } == queue)
-                .map(|(k, v)| (*k, v.clone()))
-        ))
-}
-
-fn cache_and_return(queue_raw: u64, found: Option<(u64, VkDevState)>) -> Option<VkDevState> {
-    match found {
-        Some((k, v)) => {
-            queue_dev_put(queue_raw, k);
-            Some(v)
-        }
-        None => fallback_dev(),
-    }
-}
-
-pub(crate) fn queue_owner(queue: vk::Queue) -> Option<VkDevState> {
+pub(crate) fn queue_owner(queue: vk::Queue) -> Option<(VkDevState, u32)> {
     queue_dev_get(queue.as_raw())
-        .and_then(devs_get)
-        .or_else(|| cache_and_return(queue.as_raw(), find_queue_in_devs(queue)))
-}
-
-fn first_queue_family(ci: *const vk::DeviceCreateInfo) -> u32 {
-    unsafe {
-        std::slice::from_raw_parts((*ci).p_queue_create_infos, (*ci).queue_create_info_count as usize)
-            .first()
-            .map(|q| q.queue_family_index)
-            .unwrap_or(0)
-    }
+        .and_then(|b| devs_get(b.device_raw).map(|d| (d, b.family)))
 }
 
 fn register_device(
@@ -95,15 +66,14 @@ fn register_device(
     handle: vk::Device,
     inst: &VkInstState,
     phys: vk::PhysicalDevice,
-    ci: *const vk::DeviceCreateInfo,
+    _ci: *const vk::DeviceCreateInfo,
 ) {
     let mut inst_fp = inst.instance.fp_v1_0().clone();
     inst_fp.get_device_proc_addr = gdpa;
     let device = unsafe { ash::Device::load(&inst_fp, handle) };
     let swap_fp = vk::KhrSwapchainFn::load(|name| unsafe { mem::transmute(gdpa(handle, name.as_ptr())) });
     let mem_props = unsafe { inst.instance.get_physical_device_memory_properties(phys) };
-    let qfam = first_queue_family(ci);
-    devs_put(handle.as_raw(), VkDevState { device, mem_props, gdpa, swap_fp, qfam });
+    devs_put(handle.as_raw(), VkDevState { device, mem_props, gdpa, swap_fp });
     log_at(LogLevel::Info, "vk device registered");
 }
 

@@ -72,13 +72,14 @@ struct PostfxFrame {
     need_history_init: bool,
 }
 
-fn extract_postfx_frame(st: &mut VkSwapState, idx: usize) -> PostfxFrame {
+fn extract_postfx_frame(st: &mut VkSwapState, idx: usize) -> Option<PostfxFrame> {
+    let r = st.submit_res.as_ref()?;
     let need_history_init = !st.history_init;
     st.history_init = true;
-    PostfxFrame {
-        fence: st.fences[idx],
-        semaphore: st.semaphores[idx],
-        cmd_buf: st.cmd_bufs[idx],
+    Some(PostfxFrame {
+        fence: r.fences[idx],
+        semaphore: r.semaphores[idx],
+        cmd_buf: r.cmd_bufs[idx],
         swap_image: st.images[idx],
         extent: st.extent,
         render_pass: st.render_pass,
@@ -90,7 +91,7 @@ fn extract_postfx_frame(st: &mut VkSwapState, idx: usize) -> PostfxFrame {
         tex_output: st.tex_output,
         tex_history: st.tex_history,
         need_history_init,
-    }
+    })
 }
 
 fn record_postfx_commands(dev: &VkDevState, frame: &PostfxFrame) {
@@ -120,8 +121,8 @@ fn record_postfx_commands(dev: &VkDevState, frame: &PostfxFrame) {
 
     barrier(dev, cb, img,
         vk::ImageLayout::PRESENT_SRC_KHR, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        vk::AccessFlags::MEMORY_READ, vk::AccessFlags::TRANSFER_READ,
-        vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
+        vk::AccessFlags::COLOR_ATTACHMENT_WRITE, vk::AccessFlags::TRANSFER_READ,
+        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, vk::PipelineStageFlags::TRANSFER);
     barrier(dev, cb, frame.tex_input,
         vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE,
@@ -213,11 +214,10 @@ fn submit_postfx(
     fence: vk::Fence,
     waits: Vec<vk::Semaphore>,
 ) -> Vec<vk::Semaphore> {
-    let stages = vec![vk::PipelineStageFlags::ALL_COMMANDS; waits.len()];
     let si = vk::SubmitInfo {
-        wait_semaphore_count: waits.len() as u32,
-        p_wait_semaphores: waits.as_ptr(),
-        p_wait_dst_stage_mask: stages.as_ptr(),
+        wait_semaphore_count: 0,
+        p_wait_semaphores: std::ptr::null(),
+        p_wait_dst_stage_mask: std::ptr::null(),
         command_buffer_count: 1,
         p_command_buffers: &cb,
         signal_semaphore_count: 1,
@@ -225,7 +225,11 @@ fn submit_postfx(
         ..Default::default()
     };
     match unsafe { dev.device.queue_submit(queue, &[si], fence) } {
-        Ok(()) => vec![done],
+        Ok(()) => {
+            let mut combined = waits;
+            combined.push(done);
+            combined
+        }
         Err(_) => {
             log_at(LogLevel::Error, "postfx submit failed, passing original waits through");
             recover_submit_failure(dev, queue, cb, fence);
@@ -235,9 +239,16 @@ fn submit_postfx(
 }
 
 fn record_postfx_pass(
-    queue: vk::Queue, dev: &VkDevState, sc_raw: u64, idx: usize, waits: Vec<vk::Semaphore>,
+    queue: vk::Queue, dev: &VkDevState, fam: u32, sc_raw: u64, idx: usize, waits: Vec<vk::Semaphore>,
 ) -> Vec<vk::Semaphore> {
-    match swap_fx_lock_mut(sc_raw, |st| { check_rebuild_pipeline(dev, st); extract_postfx_frame(st, idx) }) {
+    let frame_opt = swap_fx_lock_mut(sc_raw, |st| {
+        check_rebuild_pipeline(dev, st);
+        match ensure_submit_resources(dev, st, fam) {
+            true => extract_postfx_frame(st, idx),
+            false => None,
+        }
+    }).flatten();
+    match frame_opt {
         None => waits,
         Some(frame) => {
             call_wait_and_reset_fence(dev, frame.fence);
@@ -251,7 +262,7 @@ pub(crate) fn call_real_queue_present(dev: &VkDevState, queue: vk::Queue, info: 
     unsafe { (dev.swap_fp.queue_present_khr)(queue, info) }
 }
 
-pub(crate) fn run_vk_present_chain(dev: &VkDevState, queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
+pub(crate) fn run_vk_present_chain(dev: &VkDevState, fam: u32, queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
     let (swaps, indices, waits0) = unsafe {
         let n = (*info).swapchain_count as usize;
         let scs = std::slice::from_raw_parts((*info).p_swapchains, n).to_vec();
@@ -262,7 +273,7 @@ pub(crate) fn run_vk_present_chain(dev: &VkDevState, queue: vk::Queue, info: *co
     };
     let finals = swaps.iter().zip(indices.iter())
         .filter(|(sc, _)| swap_has(sc.as_raw()))
-        .fold(waits0, |w, (sc, idx)| record_postfx_pass(queue, dev, sc.as_raw(), *idx as usize, w));
+        .fold(waits0, |w, (sc, idx)| record_postfx_pass(queue, dev, fam, sc.as_raw(), *idx as usize, w));
     let patched = unsafe {
         vk::PresentInfoKHR {
             p_next: (*info).p_next,

@@ -4,13 +4,13 @@ mod consts;
 mod logging;
 mod util;
 mod timing;
+mod env;
 mod config;
 mod effect;
 mod shader;
 mod watch;
-mod interpose;
 mod launcher;
-mod gl;
 mod vk;
 
+pub use env::process_args;
 pub use launcher::run_launcher;

@@ -8,10 +8,11 @@ pub(crate) fn find_mem_type(props: &vk::PhysicalDeviceMemoryProperties, bits: u3
         .unwrap_or(0)
 }
 
-pub(crate) fn create_offscreen_image(
+pub(crate) fn create_offscreen_image_with_usage(
     dev: &VkDevState,
     extent: vk::Extent2D,
     format: vk::Format,
+    usage: vk::ImageUsageFlags,
 ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
     let ici = vk::ImageCreateInfo {
         image_type: vk::ImageType::TYPE_2D,
@@ -21,10 +22,7 @@ pub(crate) fn create_offscreen_image(
         array_layers: 1,
         samples: vk::SampleCountFlags::TYPE_1,
         tiling: vk::ImageTiling::OPTIMAL,
-        usage: vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::TRANSFER_DST
-            | vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        usage,
         sharing_mode: vk::SharingMode::EXCLUSIVE,
         initial_layout: vk::ImageLayout::UNDEFINED,
         ..Default::default()
@@ -52,4 +50,36 @@ pub(crate) fn create_offscreen_image(
     };
     let view = unsafe { dev.device.create_image_view(&vci, None) }.map_err(|_| ())?;
     Ok((img, mem, view))
+}
+
+pub(crate) fn create_offscreen_image(
+    dev: &VkDevState,
+    extent: vk::Extent2D,
+    format: vk::Format,
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    create_offscreen_image_with_usage(
+        dev,
+        extent,
+        format,
+        vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+    )
+}
+
+pub(crate) fn create_compute_output_image(
+    dev: &VkDevState,
+    extent: vk::Extent2D,
+    format: vk::Format,
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    create_offscreen_image_with_usage(
+        dev,
+        extent,
+        format,
+        vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::STORAGE,
+    )
 }

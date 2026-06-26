@@ -36,7 +36,14 @@ pub(crate) fn create_render_pass(dev: &VkDevState, format: vk::Format) -> Result
     unsafe { dev.device.create_render_pass(&rpci, None) }.map_err(|_| ())
 }
 
-pub(crate) fn create_desc_layout(dev: &VkDevState) -> Result<vk::DescriptorSetLayout, ()> {
+fn desc_layout_flags(push_desc: bool) -> vk::DescriptorSetLayoutCreateFlags {
+    match push_desc {
+        true => vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR,
+        false => vk::DescriptorSetLayoutCreateFlags::empty(),
+    }
+}
+
+pub(crate) fn create_desc_layout_fragment(dev: &VkDevState, push_desc: bool) -> Result<vk::DescriptorSetLayout, ()> {
     let bindings = [
         vk::DescriptorSetLayoutBinding {
             binding: 0,
@@ -54,7 +61,41 @@ pub(crate) fn create_desc_layout(dev: &VkDevState) -> Result<vk::DescriptorSetLa
         },
     ];
     let ci = vk::DescriptorSetLayoutCreateInfo {
+        flags: desc_layout_flags(push_desc),
         binding_count: 2,
+        p_bindings: bindings.as_ptr(),
+        ..Default::default()
+    };
+    unsafe { dev.device.create_descriptor_set_layout(&ci, None) }.map_err(|_| ())
+}
+
+pub(crate) fn create_desc_layout_compute(dev: &VkDevState, push_desc: bool) -> Result<vk::DescriptorSetLayout, ()> {
+    let bindings = [
+        vk::DescriptorSetLayoutBinding {
+            binding: 0,
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 1,
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            ..Default::default()
+        },
+        vk::DescriptorSetLayoutBinding {
+            binding: 1,
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 1,
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            ..Default::default()
+        },
+        vk::DescriptorSetLayoutBinding {
+            binding: 2,
+            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+            descriptor_count: 1,
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            ..Default::default()
+        },
+    ];
+    let ci = vk::DescriptorSetLayoutCreateInfo {
+        flags: desc_layout_flags(push_desc),
+        binding_count: 3,
         p_bindings: bindings.as_ptr(),
         ..Default::default()
     };
@@ -70,6 +111,26 @@ fn create_shader_module(dev: &VkDevState, spv: &[u32]) -> Result<vk::ShaderModul
     unsafe { dev.device.create_shader_module(&ci, None) }.map_err(|_| ())
 }
 
+fn destroy_module(dev: &VkDevState, m: vk::ShaderModule) {
+    unsafe { dev.device.destroy_shader_module(m, None); }
+}
+
+fn destroy_module_pair(dev: &VkDevState, vs: vk::ShaderModule, fs: vk::ShaderModule) {
+    destroy_module(dev, vs);
+    destroy_module(dev, fs);
+}
+
+fn create_module_pair(dev: &VkDevState, vert_spv: &[u32], frag_spv: &[u32]) -> Result<(vk::ShaderModule, vk::ShaderModule), ()> {
+    let vs = create_shader_module(dev, vert_spv)?;
+    match create_shader_module(dev, frag_spv) {
+        Ok(fs) => Ok((vs, fs)),
+        Err(()) => {
+            destroy_module(dev, vs);
+            Err(())
+        }
+    }
+}
+
 pub(crate) fn create_pipeline(
     dev: &VkDevState,
     layout: vk::PipelineLayout,
@@ -78,15 +139,7 @@ pub(crate) fn create_pipeline(
     frag_spv: &[u32],
 ) -> Result<vk::Pipeline, ()> {
     let vert_spv = compile_vert_spirv()?;
-    let vs = create_shader_module(dev, &vert_spv)?;
-    let fs_r = create_shader_module(dev, frag_spv);
-    let fs = match fs_r {
-        Ok(m) => m,
-        Err(()) => {
-            unsafe { dev.device.destroy_shader_module(vs, None) };
-            return Err(());
-        }
-    };
+    let (vs, fs) = create_module_pair(dev, &vert_spv, frag_spv)?;
     let entry = CString::new("main").unwrap_or_default();
     let stages = [
         vk::PipelineShaderStageCreateInfo {
@@ -130,9 +183,29 @@ pub(crate) fn create_pipeline(
         layout, render_pass: pass, ..Default::default()
     };
     let r = unsafe { dev.device.create_graphics_pipelines(vk::PipelineCache::null(), &[pci], None) };
-    unsafe {
-        dev.device.destroy_shader_module(vs, None);
-        dev.device.destroy_shader_module(fs, None);
-    }
+    destroy_module_pair(dev, vs, fs);
+    r.map(|v| v[0]).map_err(|_| ())
+}
+
+pub(crate) fn create_compute_pipeline(
+    dev: &VkDevState,
+    layout: vk::PipelineLayout,
+    comp_spv: &[u32],
+) -> Result<vk::Pipeline, ()> {
+    let cs = create_shader_module(dev, comp_spv)?;
+    let entry = CString::new("main").unwrap_or_default();
+    let stage = vk::PipelineShaderStageCreateInfo {
+        stage: vk::ShaderStageFlags::COMPUTE,
+        module: cs,
+        p_name: entry.as_ptr(),
+        ..Default::default()
+    };
+    let pci = vk::ComputePipelineCreateInfo {
+        stage,
+        layout,
+        ..Default::default()
+    };
+    let r = unsafe { dev.device.create_compute_pipelines(vk::PipelineCache::null(), &[pci], None) };
+    destroy_module(dev, cs);
     r.map(|v| v[0]).map_err(|_| ())
 }

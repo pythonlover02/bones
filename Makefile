@@ -3,16 +3,20 @@ DESTDIR ?=
 BINDIR  := $(PREFIX)/bin
 LIBDIR  := $(PREFIX)/lib/bones
 
-TARGET          := target/release/libbones.so
-BIN             := target/release/bones
-INTEGRATED_DIR  := target/release/integrated
-CONTAINER_STAMP := target/release/.container-stamp
+TARGET_64 := target/release/libbones.so
+TARGET_32 := target/i686-unknown-linux-gnu/release/libbones.so
+BIN       := target/release/bones
+
+INTEGRATED_DIR := target/release/integrated
+INTEGRATED_64  := $(INTEGRATED_DIR)/x86_64
+INTEGRATED_32  := $(INTEGRATED_DIR)/i686
 
 MANIFEST     := VkLayer_bones.json
 LICENSE      := LICENSE
 DIST_LICENSE := dist.LICENSE
 
 CARGO     ?= cargo
+RUSTUP    ?= rustup
 CONTAINER ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo podman)
 CONTAINER_IMAGE := rust:bookworm
 
@@ -23,62 +27,38 @@ FLATPAK_SRCDIR   := ftk
 FLATPAK_EXT_ID   := org.freedesktop.Platform.VulkanLayer.bones
 FLATPAK_ARCH     := x86_64
 
+CONTAINER_STAMP_64 := target/release/.container-stamp-64
+CONTAINER_STAMP_32 := target/release/.container-stamp-32
+
 RUST_SOURCES := Cargo.toml Cargo.lock \
   $(shell find . -path ./target -prune -o -name '*.rs' -print 2>/dev/null)
 
 FLATPAK_BUNDLES := $(foreach rt,$(FLATPAK_RUNTIMES),\
   $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-$(rt).flatpak)
 
-INTEGRATED_FILES := \
-  $(INTEGRATED_DIR)/libbones.so \
-  $(INTEGRATED_DIR)/$(MANIFEST) \
-  $(INTEGRATED_DIR)/$(LICENSE) \
-  $(INTEGRATED_DIR)/$(DIST_LICENSE)
+FLATPAK_LIB_DEPS_32 := $(wildcard $(TARGET_32))
 
-ifeq ($(filter grouped-target,$(.FEATURES)),)
-$(error GNU make 4.3+ required)
-endif
-
-check_tool = $(if $(shell command -v $(1) 2>/dev/null),,\
-  $(error required tool '$(1)' not in PATH))
-
-ifneq (,$(filter flatpak,$(MAKECMDGOALS)))
-ifeq (,$(wildcard $(TARGET)))
-$(error nothing in target/ — run 'make' or 'make release' first)
-endif
-$(foreach t,flatpak ostree python3,$(call check_tool,$(t)))
-endif
-
-ifneq (,$(filter integrated,$(MAKECMDGOALS)))
-ifeq (,$(wildcard $(TARGET)))
-$(error nothing in target/ — run 'make' or 'make release' first)
-endif
-endif
-
-ifneq (,$(filter release,$(MAKECMDGOALS)))
-ifeq ($(shell command -v $(CONTAINER) 2>/dev/null),)
-$(error required tool 'podman' or 'docker' not in PATH)
-endif
-endif
-
-BUILT_LIB      := $(wildcard $(TARGET))
+BUILT_LIB_64   := $(wildcard $(TARGET_64))
+BUILT_LIB_32   := $(wildcard $(TARGET_32))
 BUILT_BIN      := $(wildcard $(BIN))
 BUILT_FLATPAKS := $(wildcard $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-*.flatpak)
-
-ifneq (,$(BUILT_FLATPAKS))
-ifneq (,$(filter install,$(MAKECMDGOALS)))
-$(call check_tool,flatpak)
-endif
-endif
 
 INSTALL_FILES :=
 ifneq (,$(BUILT_BIN))
 INSTALL_FILES += $(DESTDIR)$(BINDIR)/bones
 endif
-ifneq (,$(BUILT_LIB))
+ifneq (,$(BUILT_LIB_64))
 INSTALL_FILES += \
-  $(DESTDIR)$(LIBDIR)/libbones.so \
-  $(DESTDIR)$(LIBDIR)/$(MANIFEST) \
+  $(DESTDIR)$(LIBDIR)/x86_64/libbones.so \
+  $(DESTDIR)$(LIBDIR)/x86_64/$(MANIFEST)
+endif
+ifneq (,$(BUILT_LIB_32))
+INSTALL_FILES += \
+  $(DESTDIR)$(LIBDIR)/i686/libbones.so \
+  $(DESTDIR)$(LIBDIR)/i686/$(MANIFEST)
+endif
+ifneq (,$(BUILT_LIB_64)$(BUILT_LIB_32))
+INSTALL_FILES += \
   $(DESTDIR)$(LIBDIR)/$(LICENSE) \
   $(DESTDIR)$(LIBDIR)/$(DIST_LICENSE)
 endif
@@ -86,17 +66,40 @@ endif
 INSTALLED_FLATPAK_STAMPS := \
   $(BUILT_FLATPAKS:$(FLATPAK_OUTDIR)/%.flatpak=$(DESTDIR)$(LIBDIR)/.installed-%)
 
-.PHONY: all release integrated flatpak install remove uninstall \
+ifeq ($(filter grouped-target,$(.FEATURES)),)
+$(error GNU make 4.3+ required)
+endif
+
+.PHONY: all 32 release integrated flatpak install remove uninstall \
         clean flatpak-clean check-root check-sudo-user
 
-all: $(TARGET) $(BIN)
+all: $(TARGET_64) $(BIN)
 
-$(TARGET) $(BIN) &: $(RUST_SOURCES)
+$(TARGET_64) $(BIN) &: $(RUST_SOURCES)
 	$(CARGO) build --release
 
-release: $(CONTAINER_STAMP)
+32: $(TARGET_32)
 
-$(CONTAINER_STAMP): $(RUST_SOURCES)
+$(TARGET_32): $(RUST_SOURCES)
+	@command -v $(RUSTUP) >/dev/null 2>&1 || { \
+	  echo "error: rustup required for 32-bit builds"; exit 1; }
+	@$(RUSTUP) target list --installed | grep -q '^i686-unknown-linux-gnu$$' \
+	  || $(RUSTUP) target add i686-unknown-linux-gnu
+	@command -v cmake >/dev/null 2>&1 || { echo "error: cmake required"; exit 1; }
+	@command -v python3 >/dev/null 2>&1 || { echo "error: python3 required"; exit 1; }
+	@command -v git >/dev/null 2>&1 || { echo "error: git required"; exit 1; }
+	CFLAGS="-m32" CXXFLAGS="-m32 -include cstdint" \
+	CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
+	CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+	$(CARGO) build --release \
+	    --target i686-unknown-linux-gnu \
+	    --features shaderc-from-source
+
+release: $(CONTAINER_STAMP_64) $(CONTAINER_STAMP_32)
+
+$(CONTAINER_STAMP_64): $(RUST_SOURCES)
+	@command -v $(CONTAINER) >/dev/null 2>&1 || { \
+	  echo "error: podman or docker required"; exit 1; }
 	@echo "==> building portable 64-bit (Debian Bookworm / glibc 2.36)..."
 	$(CONTAINER) run --rm -v $$(pwd):/src:z -w /src $(CONTAINER_IMAGE) sh -c '\
 	  apt-get update -qq && \
@@ -105,28 +108,72 @@ $(CONTAINER_STAMP): $(RUST_SOURCES)
 	@mkdir -p $(@D)
 	@touch $@
 
-integrated: $(INTEGRATED_FILES)
+$(CONTAINER_STAMP_32): $(RUST_SOURCES)
+	@command -v $(CONTAINER) >/dev/null 2>&1 || { \
+	  echo "error: podman or docker required"; exit 1; }
+	@echo "==> building portable 32-bit (Debian Bookworm / glibc 2.36)..."
+	$(CONTAINER) run --rm -v $$(pwd):/src:z -w /src $(CONTAINER_IMAGE) sh -c '\
+	  dpkg --add-architecture i386 && apt-get update -qq && \
+	  apt-get install -y -qq cmake python3 git pkg-config gcc-multilib g++-multilib 2>/dev/null && \
+	  rustup target add i686-unknown-linux-gnu && \
+	  CFLAGS="-m32" CXXFLAGS="-m32 -include cstdint" \
+	  CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
+	  CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+	  cargo build --release --target i686-unknown-linux-gnu --features shaderc-from-source'
+	@mkdir -p $(@D)
+	@touch $@
 
-$(INTEGRATED_DIR)/libbones.so:     $(TARGET)        ; @mkdir -p $(@D) && cp $< $@
-$(INTEGRATED_DIR)/$(MANIFEST):     $(MANIFEST)      ; @mkdir -p $(@D) && cp $< $@
-$(INTEGRATED_DIR)/$(LICENSE):      $(LICENSE)       ; @mkdir -p $(@D) && cp $< $@
-$(INTEGRATED_DIR)/$(DIST_LICENSE): $(DIST_LICENSE)  ; @mkdir -p $(@D) && cp $< $@
+integrated: \
+  $(INTEGRATED_64)/libbones.so $(INTEGRATED_64)/$(MANIFEST) \
+  $(INTEGRATED_DIR)/$(LICENSE) $(INTEGRATED_DIR)/$(DIST_LICENSE)
+
+$(INTEGRATED_64)/libbones.so: $(TARGET_64)
+	@mkdir -p $(@D)
+	cp $< $@
+
+$(INTEGRATED_64)/$(MANIFEST): $(MANIFEST)
+	@mkdir -p $(@D)
+	cp $< $@
+
+$(INTEGRATED_32)/libbones.so: $(TARGET_32)
+	@mkdir -p $(@D)
+	cp $< $@
+
+$(INTEGRATED_32)/$(MANIFEST): $(MANIFEST)
+	@mkdir -p $(@D)
+	cp $< $@
+
+$(INTEGRATED_DIR)/$(LICENSE): $(LICENSE)
+	@mkdir -p $(@D)
+	cp $< $@
+
+$(INTEGRATED_DIR)/$(DIST_LICENSE): $(DIST_LICENSE)
+	@mkdir -p $(@D)
+	cp $< $@
 
 flatpak: $(FLATPAK_BUNDLES)
 
 $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-%.flatpak: \
-    $(TARGET) $(MANIFEST) $(LICENSE) $(DIST_LICENSE) \
+    $(TARGET_64) $(FLATPAK_LIB_DEPS_32) $(MANIFEST) $(LICENSE) $(DIST_LICENSE) \
     $(FLATPAK_SRCDIR)/bones-flatpak \
     $(FLATPAK_SRCDIR)/metadata.% \
     $(FLATPAK_SRCDIR)/commit.py
+	@command -v flatpak >/dev/null 2>&1 || { echo "error: flatpak required"; exit 1; }
+	@command -v ostree  >/dev/null 2>&1 || { echo "error: ostree required";  exit 1; }
+	@command -v python3 >/dev/null 2>&1 || { echo "error: python3 required"; exit 1; }
 	@mkdir -p $(@D)
 	@rt="$*"; work="$(FLATPAK_WORKDIR).$$rt"; \
 	echo "building flatpak extension for runtime $$rt..."; \
 	rm -rf $$work; \
-	mkdir -p $$work/stage/files/lib $$work/stage/files/bin $$work/repo; \
+	mkdir -p $$work/stage/files/lib/x86_64 $$work/stage/files/bin $$work/repo; \
 	ostree init --repo=$$work/repo --mode=archive-z2; \
-	cp $(TARGET)       $$work/stage/files/lib/libbones.so; \
-	cp $(MANIFEST)     $$work/stage/files/lib/VkLayer_bones.json; \
+	cp $(TARGET_64) $$work/stage/files/lib/x86_64/libbones.so; \
+	cp $(MANIFEST)  $$work/stage/files/lib/x86_64/VkLayer_bones.json; \
+	if [ -n "$(FLATPAK_LIB_DEPS_32)" ]; then \
+	  mkdir -p $$work/stage/files/lib/i686; \
+	  cp $(TARGET_32) $$work/stage/files/lib/i686/libbones.so; \
+	  cp $(MANIFEST)  $$work/stage/files/lib/i686/VkLayer_bones.json; \
+	fi; \
 	cp $(LICENSE)      $$work/stage/files/lib/LICENSE; \
 	cp $(DIST_LICENSE) $$work/stage/files/lib/dist.LICENSE; \
 	cp $(FLATPAK_SRCDIR)/bones-flatpak $$work/stage/files/bin/bones-flatpak; \
@@ -140,16 +187,18 @@ $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-%.flatpak: \
 
 install: check-root $(INSTALL_FILES) $(INSTALLED_FLATPAK_STAMPS)
 ifeq (,$(strip $(INSTALL_FILES)$(INSTALLED_FLATPAK_STAMPS)))
-	@echo "nothing to install — build first with 'make' (or 'make release') and/or 'make flatpak'"
+	@echo "nothing to install — build first with 'make', 'make 32', or 'make release', and/or 'make flatpak'"
 else
 	@echo "install complete."
 endif
 
-$(DESTDIR)$(BINDIR)/bones:           $(BIN)          ; install -Dm755 $< $@
-$(DESTDIR)$(LIBDIR)/libbones.so:     $(TARGET)       ; install -Dm755 $< $@
-$(DESTDIR)$(LIBDIR)/$(MANIFEST):     $(MANIFEST)     ; install -Dm644 $< $@
-$(DESTDIR)$(LIBDIR)/$(LICENSE):      $(LICENSE)      ; install -Dm644 $< $@
-$(DESTDIR)$(LIBDIR)/$(DIST_LICENSE): $(DIST_LICENSE) ; install -Dm644 $< $@
+$(DESTDIR)$(BINDIR)/bones:                   $(BIN)          ; install -Dm755 $< $@
+$(DESTDIR)$(LIBDIR)/x86_64/libbones.so:      $(TARGET_64)    ; install -Dm755 $< $@
+$(DESTDIR)$(LIBDIR)/x86_64/$(MANIFEST):      $(MANIFEST)     ; install -Dm644 $< $@
+$(DESTDIR)$(LIBDIR)/i686/libbones.so:        $(TARGET_32)    ; install -Dm755 $< $@
+$(DESTDIR)$(LIBDIR)/i686/$(MANIFEST):        $(MANIFEST)     ; install -Dm644 $< $@
+$(DESTDIR)$(LIBDIR)/$(LICENSE):              $(LICENSE)      ; install -Dm644 $< $@
+$(DESTDIR)$(LIBDIR)/$(DIST_LICENSE):         $(DIST_LICENSE) ; install -Dm644 $< $@
 
 $(DESTDIR)$(LIBDIR)/.installed-%: $(FLATPAK_OUTDIR)/%.flatpak | check-sudo-user
 	@mkdir -p $(@D)
@@ -190,7 +239,7 @@ check-sudo-user:
 clean:
 	$(CARGO) clean
 	rm -rf $(INTEGRATED_DIR) $(FLATPAK_OUTDIR) $(FLATPAK_WORKDIR)*
-	rm -f  $(CONTAINER_STAMP)
+	rm -f  $(CONTAINER_STAMP_64) $(CONTAINER_STAMP_32)
 
 flatpak-clean:
 	rm -rf $(FLATPAK_OUTDIR) $(FLATPAK_WORKDIR)*

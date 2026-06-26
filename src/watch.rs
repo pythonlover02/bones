@@ -23,6 +23,7 @@ use crate::logging::log_at;
 use crate::logging::LogLevel;
 use crate::shader::build_shaders;
 use crate::shader::store_shaders;
+use crate::shader::ShaderArtifacts;
 
 static NOTIFY_FD: OnceLock<i32> = OnceLock::new();
 static DIRTY: AtomicBool = AtomicBool::new(false);
@@ -60,8 +61,8 @@ fn fd_is_valid(fd: i32) -> bool {
     fd >= 0
 }
 
-fn reload_is_broken(spv: &[u32], s: &Settings, reg: &[EffectDef]) -> bool {
-    spv.is_empty() && any_effect_enabled(s, reg)
+fn reload_is_broken(a: &ShaderArtifacts, s: &Settings, reg: &[EffectDef]) -> bool {
+    a.frag.is_empty() && a.comp.is_empty() && any_effect_enabled(s, reg)
 }
 
 fn poll_dirty() -> bool {
@@ -99,12 +100,12 @@ fn init_inotify() {
     });
 }
 
-fn apply_reload(s: Settings, gl: String, spv: Vec<u32>, reg: &[EffectDef]) {
-    match reload_is_broken(&spv, &s, reg) {
+fn apply_reload(s: Settings, a: ShaderArtifacts, reg: &[EffectDef]) {
+    match reload_is_broken(&a, &s, reg) {
         true => log_at(LogLevel::Warn, "hot reload: spirv compile failed, vulkan postfx will not update"),
         false => (),
     }
-    store_shaders(gl, spv);
+    store_shaders(a);
     store_settings(s);
     log_at(LogLevel::Info, "hot reload applied");
 }
@@ -120,8 +121,8 @@ pub(crate) fn maybe_reload() {
     match poll_dirty() {
         true => {
             let s = read_config(&config_path(&profile_name()), &REGISTRY);
-            let (gl, spv) = build_shaders(&s, &REGISTRY);
-            apply_reload(s, gl, spv, &REGISTRY);
+            let spv = build_shaders(&s, &REGISTRY);
+            apply_reload(s, spv, &REGISTRY);
         }
         false => (),
     }

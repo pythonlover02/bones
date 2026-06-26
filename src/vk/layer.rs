@@ -1,4 +1,6 @@
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::c_char;
+use std::ffi::c_void;
+use std::ffi::CString;
 use std::mem;
 use std::ptr;
 
@@ -6,29 +8,24 @@ use ash::vk;
 use ash::vk::Handle;
 
 use crate::config::ensure_settings;
-use crate::config::Settings;
-use crate::consts::EffectDef;
 use crate::consts::LAYER_DESC;
 use crate::consts::LAYER_IFACE_VERSION;
 use crate::consts::LAYER_LINK_INFO;
 use crate::consts::LAYER_NAME;
 use crate::consts::NULL_OK;
-use crate::consts::REGISTRY;
-use crate::effect::any_effect_enabled;
 use crate::logging::init_log_level;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
 use crate::util::cstr_to_str;
 use crate::watch::maybe_reload;
 
-use super::instance::*;
 use super::device::*;
 use super::device::QueueBinding;
-use super::swapchain::*;
+use super::instance::*;
 use super::present::*;
+use super::swapchain::*;
 
-#[repr(C)]
-struct VkNegotiateLayerInterface {
+#[repr(C)]struct VkNegotiateLayerInterface {
     s_type: i32,
     p_next: *mut c_void,
     loader_layer_interface_version: u32,
@@ -133,6 +130,38 @@ fn copy_cstr(dst: &mut [c_char], s: &str) {
     s.bytes().take(dst.len() - 1).enumerate().for_each(|(i, b)| dst[i] = b as c_char);
 }
 
+fn forward_device_proc(dev: vk::Device, name: &str) -> vk::PFN_vkVoidFunction {
+    match devs_gdpa(dev.as_raw()) {
+        Some(gdpa) => call_next_gdpa(gdpa, dev, name),
+        None => None,
+    }
+}
+
+fn resolve_instance_proc(inst: vk::Instance, name: &str) -> vk::PFN_vkVoidFunction {
+    match (vk_hooked_symbol(name), insts_get(inst.as_raw())) {
+        (Some(p), _) => unsafe { mem::transmute(p) },
+        (None, Some(st)) => call_next_gipa(st.gipa, inst, name),
+        (None, None) => None,
+    }
+}
+
+fn resolve_null_instance_proc(name: &str) -> vk::PFN_vkVoidFunction {
+    match null_ok_name(name) {
+        true => unsafe { mem::transmute(null_ok_ptr(name)) },
+        false => None,
+    }
+}
+
+fn call_chain_destroy_instance(s: &VkInstState, inst: vk::Instance, alloc: *const vk::AllocationCallbacks) {
+    match call_next_gipa(s.gipa, inst, "vkDestroyInstance") {
+        Some(d) => unsafe {
+            let df: vk::PFN_vkDestroyInstance = mem::transmute(d);
+            df(inst, alloc);
+        },
+        None => (),
+    }
+}
+
 unsafe extern "system" fn bones_EnumerateInstanceExtensionProperties(
     layer: *const c_char,
     count: *mut u32,
@@ -194,22 +223,9 @@ unsafe extern "system" fn bones_GetDeviceQueue2(dev: vk::Device, info: *const vk
 
 unsafe extern "system" fn vkGetInstanceProcAddr(inst: vk::Instance, name: *const c_char) -> vk::PFN_vkVoidFunction {
     let n = cstr_to_str(name);
-    let is_null = inst == vk::Instance::null();
-    match (is_null, null_ok_name(n), vk_hooked_symbol(n)) {
-        (true, true, _) => mem::transmute(null_ok_ptr(n)),
-        (true, false, _) => None,
-        (false, _, Some(p)) => mem::transmute(p),
-        (false, _, None) => match insts_get(inst.as_raw()) {
-            Some(st) => call_next_gipa(st.gipa, inst, n),
-            None => None,
-        },
-    }
-}
-
-fn forward_device_proc(dev: vk::Device, name: &str) -> vk::PFN_vkVoidFunction {
-    match devs_gdpa(dev.as_raw()) {
-        Some(gdpa) => call_next_gdpa(gdpa, dev, name),
-        None => None,
+    match inst == vk::Instance::null() {
+        true => resolve_null_instance_proc(n),
+        false => resolve_instance_proc(inst, n),
     }
 }
 
@@ -221,16 +237,6 @@ unsafe extern "system" fn vkGetDeviceProcAddr(dev: vk::Device, name: *const c_ch
     }
 }
 
-#[no_mangle]
-pub unsafe extern "system" fn vkNegotiateLoaderLayerInterfaceVersion(p: *mut c_void) -> vk::Result {
-    let iface = p as *mut VkNegotiateLayerInterface;
-    (*iface).loader_layer_interface_version = LAYER_IFACE_VERSION;
-    (*iface).pfn_get_instance_proc_addr = Some(vkGetInstanceProcAddr);
-    (*iface).pfn_get_device_proc_addr = Some(vkGetDeviceProcAddr);
-    (*iface).pfn_get_physical_device_proc_addr = None;
-    vk::Result::SUCCESS
-}
-
 unsafe extern "system" fn vkCreateInstance(
     ci: *const vk::InstanceCreateInfo,
     alloc: *const vk::AllocationCallbacks,
@@ -239,16 +245,6 @@ unsafe extern "system" fn vkCreateInstance(
     init_log_level();
     let link = call_advance_chain(chain_link_info((*ci).p_next, vk::StructureType::LOADER_INSTANCE_CREATE_INFO));
     call_real_create_instance(link, ci, alloc, out)
-}
-
-fn call_chain_destroy_instance(s: &VkInstState, inst: vk::Instance, alloc: *const vk::AllocationCallbacks) {
-    match call_next_gipa(s.gipa, inst, "vkDestroyInstance") {
-        Some(d) => unsafe {
-            let df: vk::PFN_vkDestroyInstance = mem::transmute(d);
-            df(inst, alloc);
-        },
-        None => (),
-    }
 }
 
 unsafe extern "system" fn vkDestroyInstance(inst: vk::Instance, alloc: *const vk::AllocationCallbacks) {
@@ -294,12 +290,12 @@ unsafe extern "system" fn vkCreateSwapchainKHR(
         Some(d) => create_swapchain_with_fx(&d, dev, ci, alloc, out),
     }
 }
+
 unsafe extern "system" fn vkDestroySwapchainKHR(
     dev: vk::Device,
     sc: vk::SwapchainKHR,
     alloc: *const vk::AllocationCallbacks,
 ) {
-    pending_del(sc.as_raw());
     let st = swap_del(sc.as_raw());
     match (devs_get(dev.as_raw()), st) {
         (Some(d), Some(mut s)) => {
@@ -311,20 +307,20 @@ unsafe extern "system" fn vkDestroySwapchainKHR(
     }
 }
 
-fn present_has_fx(info: *const vk::PresentInfoKHR, s: &Settings, reg: &[EffectDef]) -> bool {
-    any_effect_enabled(s, reg) && unsafe {
-        std::slice::from_raw_parts((*info).p_swapchains, (*info).swapchain_count as usize)
-            .iter()
-            .any(|sc| swap_has(sc.as_raw()))
+unsafe extern "system" fn vkQueuePresentKHR(queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
+    maybe_reload();
+    match queue_owner(queue) {
+        Some((d, fam)) => run_vk_present_chain(&d, fam, queue, info),
+        None => vk::Result::ERROR_DEVICE_LOST,
     }
 }
 
-unsafe extern "system" fn vkQueuePresentKHR(queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
-    maybe_reload();
-    retry_pending_registrations();
-    match (queue_owner(queue), present_has_fx(info, &ensure_settings(), &REGISTRY)) {
-        (Some((d, fam)), true) => run_vk_present_chain(&d, fam, queue, info),
-        (Some((d, _)), false) => call_real_queue_present(&d, queue, info),
-        (None, _) => vk::Result::ERROR_DEVICE_LOST,
-    }
+#[no_mangle]
+pub unsafe extern "system" fn vkNegotiateLoaderLayerInterfaceVersion(p: *mut c_void) -> vk::Result {
+    let iface = p as *mut VkNegotiateLayerInterface;
+    (*iface).loader_layer_interface_version = LAYER_IFACE_VERSION;
+    (*iface).pfn_get_instance_proc_addr = Some(vkGetInstanceProcAddr);
+    (*iface).pfn_get_device_proc_addr = Some(vkGetDeviceProcAddr);
+    (*iface).pfn_get_physical_device_proc_addr = None;
+    vk::Result::SUCCESS
 }

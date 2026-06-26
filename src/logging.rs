@@ -1,16 +1,15 @@
-use std::env;
 use std::ffi::c_void;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use crate::consts::DEFAULT_LOG_LEVEL;
-use crate::consts::ENV_LOG;
 use crate::consts::LOG_FD;
 use crate::consts::LOG_LEVEL_ERROR;
 use crate::consts::LOG_LEVEL_INFO;
 use crate::consts::LOG_LEVEL_OFF;
 use crate::consts::LOG_LEVEL_WARN;
+use crate::env::env_log_level;
 
 pub(crate) enum LogLevel {
     Off,
@@ -59,7 +58,7 @@ pub(crate) fn init_log_level() {
     match LEVEL_SET.swap(true, Ordering::Relaxed) {
         true => (),
         false => LEVEL.store(
-            level_num(&parse_level(&env::var(ENV_LOG).unwrap_or_else(|_| "warn".into()))),
+            level_num(&parse_level(&env_log_level())),
             Ordering::Relaxed,
         ),
     }

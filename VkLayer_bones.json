@@ -5,8 +5,8 @@
         "type": "GLOBAL",
         "library_path": "./libbones.so",
         "api_version": "1.0.0",
-        "implementation_version": "3",
-        "description": "Bones -> Linux GL/Vulkan shader post-FX",
+        "implementation_version": "4",
+        "description": "Performance first Vulkan ubershader Post Processing layer for Linux.",
         "functions": {
             "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
         }

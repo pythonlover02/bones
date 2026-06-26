@@ -2,82 +2,145 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::RwLock;
 
-use crate::config::default_settings;
 use crate::config::Settings;
-use crate::consts::VERT_VK_SRC;
-use crate::consts::VK_HEADER;
-use crate::consts::UBER_SRC;
+use crate::consts::COMPUTE_X_DEFAULT;
+use crate::consts::COMPUTE_Y_DEFAULT;
 use crate::consts::EffectDef;
-use crate::consts::REGISTRY;
+use crate::consts::UBER_SRC;
+use crate::consts::VERT_SRC;
 use crate::effect::emit_defines;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
 
-static SHADER_GL: RwLock<Option<String>> = RwLock::new(None);
-static SHADER_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
-static VERT_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
-pub(crate) static GENERATION: AtomicI32 = AtomicI32::new(0);
-
-enum LineClass {
-    Version,
-    UniformInput,
-    UniformHistory,
-    UniformResolution,
-    UniformTime,
-    UniformFps,
-    FragOut,
-    Other,
+pub(crate) struct ShaderArtifacts {
+    pub(crate) frag: Vec<u32>,
+    pub(crate) comp: Vec<u32>,
+    pub(crate) compute_x: u32,
+    pub(crate) compute_y: u32,
 }
+
+static SHADER_FRAG_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
+static SHADER_COMP_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
+static SHADER_WG: RwLock<(u32, u32)> = RwLock::new((COMPUTE_X_DEFAULT, COMPUTE_Y_DEFAULT));
+static VERT_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
+static WG_LIMITS: RwLock<(u32, u32, u32)> = RwLock::new((u32::MAX, u32::MAX, u32::MAX));
+static SUBGROUP_CAPS: RwLock<(bool, bool)> = RwLock::new((false, false));
+pub(crate) static GENERATION: AtomicI32 = AtomicI32::new(0);
 
 fn split_first_line(src: &str) -> (&str, &str) {
     let nl = src.find('\n').unwrap_or(src.len());
     (&src[..nl], src.get(nl + 1..).unwrap_or(""))
 }
 
-pub(crate) fn build_gl_source(s: &Settings, reg: &[EffectDef]) -> String {
+fn read_wg_limits() -> (u32, u32, u32) {
+    WG_LIMITS.read().map(|g| *g).unwrap_or((u32::MAX, u32::MAX, u32::MAX))
+}
+
+fn fallback_wg() -> (u32, u32) {
+    (COMPUTE_X_DEFAULT, COMPUTE_Y_DEFAULT)
+}
+
+fn clamp_wg_axes(req_x: u32, req_y: u32, max_x: u32, max_y: u32) -> (u32, u32) {
+    (req_x.clamp(1, max_x.max(1)), req_y.clamp(1, max_y.max(1)))
+}
+
+fn wg_within_invocation_limit(x: u32, y: u32, max_inv: u32) -> bool {
+    (x as u64).saturating_mul(y as u64) <= max_inv.max(1) as u64
+}
+
+fn log_wg_fallback(x: u32, y: u32, max_inv: u32) {
+    log_at(
+        LogLevel::Warn,
+        &format!(
+            "compute workgroup {}x{} exceeds device max invocations {}, falling back to {}x{}",
+            x, y, max_inv, COMPUTE_X_DEFAULT, COMPUTE_Y_DEFAULT
+        ),
+    );
+}
+
+fn maybe_log_wg_fallback(x: u32, y: u32, max_inv: u32) {
+    match wg_within_invocation_limit(x, y, max_inv) {
+        true => (),
+        false => log_wg_fallback(x, y, max_inv),
+    }
+}
+
+fn pick_wg(x: u32, y: u32, max_inv: u32) -> (u32, u32) {
+    match wg_within_invocation_limit(x, y, max_inv) {
+        true => (x, y),
+        false => fallback_wg(),
+    }
+}
+
+pub(crate) fn effective_workgroup(req_x: u32, req_y: u32) -> (u32, u32) {
+    let (max_x, max_y, max_inv) = read_wg_limits();
+    let (cx, cy) = clamp_wg_axes(req_x, req_y, max_x, max_y);
+    maybe_log_wg_fallback(cx, cy, max_inv);
+    pick_wg(cx, cy, max_inv)
+}
+
+pub(crate) fn set_wg_limits(max_x: u32, max_y: u32, max_inv: u32) {
+    match WG_LIMITS.write() {
+        Ok(mut g) => {
+            let (cur_x, cur_y, cur_inv) = *g;
+            *g = (
+                cur_x.min(max_x.max(1)),
+                cur_y.min(max_y.max(1)),
+                cur_inv.min(max_inv.max(1)),
+            );
+        }
+        Err(_) => (),
+    }
+}
+
+pub(crate) fn set_subgroup_caps(ext_types: bool, uniform_flow: bool) {
+    match SUBGROUP_CAPS.write() {
+        Ok(mut g) => *g = (ext_types, uniform_flow),
+        Err(_) => (),
+    }
+}
+
+fn subgroup_define_block(ext_types: bool, uniform_flow: bool) -> String {
+    let mut out = String::new();
+    match ext_types {
+        true => out.push_str("#define BONES_HAS_SUBGROUP_EXT_TYPES\n"),
+        false => (),
+    }
+    match uniform_flow {
+        true => out.push_str("#define BONES_HAS_SUBGROUP_UNIFORM_FLOW\n"),
+        false => (),
+    }
+    out
+}
+
+fn current_subgroup_caps() -> (bool, bool) {
+    SUBGROUP_CAPS.read().map(|g| *g).unwrap_or((false, false))
+}
+
+fn assemble_frag_source(s: &Settings, reg: &[EffectDef]) -> String {
     let (ver, rest) = split_first_line(UBER_SRC);
-    format!("{}\n{}{}", ver, emit_defines(s, reg), rest)
+    let (ext, uni) = current_subgroup_caps();
+    format!(
+        "{}\n{}{}{}",
+        ver,
+        subgroup_define_block(ext, uni),
+        emit_defines(s, reg),
+        rest
+    )
 }
 
-fn is_version_line(t: &str) -> bool {
-    t.starts_with("#version")
-}
-
-fn classify(line: &str) -> LineClass {
-    let t = line.trim();
-    match t {
-        _ if is_version_line(t) => LineClass::Version,
-        "uniform sampler2D u_input;" => LineClass::UniformInput,
-        "uniform sampler2D u_history;" => LineClass::UniformHistory,
-        "uniform vec2 u_resolution;" => LineClass::UniformResolution,
-        "uniform float u_time;" => LineClass::UniformTime,
-        "uniform float u_fps;" => LineClass::UniformFps,
-        "out vec4 frag_out;" => LineClass::FragOut,
-        _ => LineClass::Other,
-    }
-}
-
-fn rewrite_line(line: &str) -> String {
-    match classify(line) {
-        LineClass::Version => "#version 450".into(),
-        LineClass::UniformInput => "layout(set=0, binding=0) uniform sampler2D u_input;".into(),
-        LineClass::UniformHistory => "layout(set=0, binding=1) uniform sampler2D u_history;".into(),
-        LineClass::UniformResolution => String::new(),
-        LineClass::UniformTime => String::new(),
-        LineClass::UniformFps => String::new(),
-        LineClass::FragOut => String::new(),
-        LineClass::Other => line.into(),
-    }
-}
-
-fn insert_after_version(body: &str, header: &str) -> String {
-    let (ver, rest) = split_first_line(body);
-    format!("{}\n{}\n{}", ver, header, rest)
-}
-
-fn rewrite_gl_to_vk(gl: &str) -> String {
-    let body = gl.lines().map(rewrite_line).collect::<Vec<_>>().join("\n");
-    insert_after_version(&body, VK_HEADER)
+fn assemble_comp_source(s: &Settings, reg: &[EffectDef], wg_x: u32, wg_y: u32) -> String {
+    let (ver, rest) = split_first_line(UBER_SRC);
+    let (ext, uni) = current_subgroup_caps();
+    format!(
+        "{}\n#define COMPUTE_PATH\n#define LOCAL_SIZE_X {}\n#define LOCAL_SIZE_Y {}\n{}{}{}",
+        ver,
+        wg_x,
+        wg_y,
+        subgroup_define_block(ext, uni),
+        emit_defines(s, reg),
+        rest
+    )
 }
 
 fn new_compiler() -> Result<shaderc::Compiler, ()> {
@@ -85,22 +148,25 @@ fn new_compiler() -> Result<shaderc::Compiler, ()> {
 }
 
 fn new_compile_options() -> Result<shaderc::CompileOptions<'static>, ()> {
-    shaderc::CompileOptions::new().ok_or_else(|| log_at(LogLevel::Error, "shaderc options init failed"))
+    shaderc::CompileOptions::new()
+        .ok_or_else(|| log_at(LogLevel::Error, "shaderc options init failed"))
 }
 
 fn run_compile(
     c: &shaderc::Compiler,
     o: &shaderc::CompileOptions,
-    vk_src: &str,
+    src: &str,
     kind: shaderc::ShaderKind,
+    name: &str,
 ) -> Result<Vec<u32>, ()> {
-    c.compile_into_spirv(vk_src, kind, "bones.frag", "main", Some(o))
+    c.compile_into_spirv(src, kind, name, "main", Some(o))
         .map(|a| a.as_binary().to_vec())
-        .map_err(|e| log_at(LogLevel::Error, &format!("spirv compile failed: {}", e)))
+        .map_err(|e| log_at(LogLevel::Error, &format!("spirv compile failed ({}): {}", name, e)))
 }
 
-fn compile_vk_spirv(vk_src: &str, kind: shaderc::ShaderKind) -> Result<Vec<u32>, ()> {
-    new_compiler().and_then(|c| new_compile_options().and_then(|o| run_compile(&c, &o, vk_src, kind)))
+fn compile_spirv(src: &str, kind: shaderc::ShaderKind, name: &str) -> Result<Vec<u32>, ()> {
+    new_compiler()
+        .and_then(|c| new_compile_options().and_then(|o| run_compile(&c, &o, src, kind, name)))
 }
 
 fn cached_vert_spirv() -> Option<Vec<u32>> {
@@ -115,8 +181,10 @@ fn store_vert_spirv(v: Vec<u32>) {
 }
 
 fn compile_and_cache_vert() -> Result<Vec<u32>, ()> {
-    compile_vk_spirv(VERT_VK_SRC, shaderc::ShaderKind::Vertex)
-        .map(|v| { store_vert_spirv(v.clone()); v })
+    compile_spirv(VERT_SRC, shaderc::ShaderKind::Vertex, "bones.vert").map(|v| {
+        store_vert_spirv(v.clone());
+        v
+    })
 }
 
 pub(crate) fn compile_vert_spirv() -> Result<Vec<u32>, ()> {
@@ -126,44 +194,67 @@ pub(crate) fn compile_vert_spirv() -> Result<Vec<u32>, ()> {
     }
 }
 
-pub(crate) fn compile_frag_spirv(vk_src: &str) -> Result<Vec<u32>, ()> {
-    compile_vk_spirv(vk_src, shaderc::ShaderKind::Fragment)
+fn compile_frag_spirv(src: &str) -> Vec<u32> {
+    compile_spirv(src, shaderc::ShaderKind::Fragment, "bones.frag").unwrap_or_default()
 }
 
-pub(crate) fn build_shaders(s: &Settings, reg: &[EffectDef]) -> (String, Vec<u32>) {
-    let gl = build_gl_source(s, reg);
-    let spv = compile_frag_spirv(&rewrite_gl_to_vk(&gl)).unwrap_or_default();
-    (gl, spv)
+fn compile_comp_spirv(src: &str) -> Vec<u32> {
+    compile_spirv(src, shaderc::ShaderKind::Compute, "bones.comp").unwrap_or_default()
 }
 
-fn store_gl_shader(gl: String) {
-    match SHADER_GL.write() {
-        Ok(mut g) => *g = Some(gl),
-        Err(_) => (),
+fn maybe_compile_comp(s: &Settings, reg: &[EffectDef], wg_x: u32, wg_y: u32) -> Vec<u32> {
+    match s.compute {
+        true => compile_comp_spirv(&assemble_comp_source(s, reg, wg_x, wg_y)),
+        false => Vec::new(),
     }
 }
 
-fn store_spv_shader(spv: Vec<u32>) {
-    match SHADER_SPV.write() {
+pub(crate) fn build_shaders(s: &Settings, reg: &[EffectDef]) -> ShaderArtifacts {
+    let (wg_x, wg_y) = effective_workgroup(s.compute_x, s.compute_y);
+    ShaderArtifacts {
+        frag: compile_frag_spirv(&assemble_frag_source(s, reg)),
+        comp: maybe_compile_comp(s, reg, wg_x, wg_y),
+        compute_x: wg_x,
+        compute_y: wg_y,
+    }
+}
+
+fn store_spv(slot: &RwLock<Option<Vec<u32>>>, spv: Vec<u32>) {
+    match slot.write() {
         Ok(mut g) => *g = Some(spv),
         Err(_) => (),
     }
 }
 
-pub(crate) fn store_shaders(gl: String, spv: Vec<u32>) {
-    store_gl_shader(gl);
-    store_spv_shader(spv);
+fn store_wg(x: u32, y: u32) {
+    match SHADER_WG.write() {
+        Ok(mut g) => *g = (x, y),
+        Err(_) => (),
+    }
+}
+
+pub(crate) fn store_shaders(a: ShaderArtifacts) {
+    store_spv(&SHADER_FRAG_SPV, a.frag);
+    store_spv(&SHADER_COMP_SPV, a.comp);
+    store_wg(a.compute_x, a.compute_y);
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn current_gl_shader() -> String {
-    SHADER_GL
-        .read()
-        .ok()
-        .and_then(|g| g.clone())
-        .unwrap_or_else(|| build_gl_source(&default_settings(), &REGISTRY))
+fn read_spv(slot: &RwLock<Option<Vec<u32>>>) -> Vec<u32> {
+    slot.read().ok().and_then(|g| g.clone()).unwrap_or_default()
 }
 
-pub(crate) fn current_spv() -> Vec<u32> {
-    SHADER_SPV.read().ok().and_then(|g| g.clone()).unwrap_or_default()
+pub(crate) fn current_frag_spv() -> Vec<u32> {
+    read_spv(&SHADER_FRAG_SPV)
+}
+
+pub(crate) fn current_comp_spv() -> Vec<u32> {
+    read_spv(&SHADER_COMP_SPV)
+}
+
+pub(crate) fn current_wg() -> (u32, u32) {
+    SHADER_WG
+        .read()
+        .map(|g| *g)
+        .unwrap_or((COMPUTE_X_DEFAULT, COMPUTE_Y_DEFAULT))
 }

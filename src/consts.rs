@@ -1,18 +1,35 @@
 pub(crate) const LAYER_NAME: &str = "VK_LAYER_BONES_overlay";
-pub(crate) const LAYER_DESC: &str = "Bones -> Linux GL/Vulkan shader post-FX";
+pub(crate) const LAYER_DESC: &str = "Performance first Vulkan ubershader Post Processing layer for Linux.";
 
 pub(crate) const ENV_CONFIG_NAME: &str = "BONES_CONFIG_NAME";
 pub(crate) const ENV_CONFIG: &str = "BONES_CONFIG";
 pub(crate) const ENV_LOG: &str = "BONES_LOG";
 
+pub(crate) const ENV_RES_SCALE: &str = "BONES_RESOLUTION_SCALE";
+pub(crate) const ENV_OPT_FP16: &str = "BONES_OPTIMIZE_FP16";
+pub(crate) const ENV_OPT_DYNREN: &str = "BONES_OPTIMIZE_DYNAMIC_RENDERING";
+pub(crate) const ENV_OPT_PUSHDESC: &str = "BONES_OPTIMIZE_PUSH_DESCRIPTORS";
+pub(crate) const ENV_OPT_SUBGROUP: &str = "BONES_OPTIMIZE_SUBGROUP_OPS";
+pub(crate) const ENV_OPT_SYNC2: &str = "BONES_OPTIMIZE_SYNC2";
+pub(crate) const ENV_OPT_SUBGROUP_EXT_TYPES: &str = "BONES_OPTIMIZE_SUBGROUP_EXTENDED_TYPES";
+pub(crate) const ENV_OPT_SUBGROUP_UNIFORM_FLOW: &str = "BONES_OPTIMIZE_SUBGROUP_UNIFORM_FLOW";
+pub(crate) const ENV_OPT_ASYNC_COMPUTE: &str = "BONES_OPTIMIZE_ASYNC_COMPUTE";
+pub(crate) const ENV_COMPUTE: &str = "BONES_COMPUTE";
+pub(crate) const ENV_COMPUTE_X: &str = "BONES_COMPUTE_X";
+pub(crate) const ENV_COMPUTE_Y: &str = "BONES_COMPUTE_Y";
+
 pub(crate) const ENV_PRELOAD: &str = "LD_PRELOAD";
 pub(crate) const ENV_VK_ADD_LAYER_PATH: &str = "VK_ADD_LAYER_PATH";
 pub(crate) const ENV_VK_INSTANCE_LAYERS: &str = "VK_INSTANCE_LAYERS";
 
-pub(crate) const INSTALL_LIB: &str = "/usr/local/lib/bones/libbones.so";
-pub(crate) const INSTALL_DIR: &str = "/usr/local/lib/bones";
-pub(crate) const DEV_LIB: &str = "target/release/libbones.so";
-pub(crate) const DEV_DIR: &str = "target/release";
+pub(crate) const INSTALL_LIB_64: &str = "/usr/local/lib/bones/x86_64/libbones.so";
+pub(crate) const INSTALL_LIB_32: &str = "/usr/local/lib/bones/i686/libbones.so";
+pub(crate) const INSTALL_DIR_64: &str = "/usr/local/lib/bones/x86_64";
+pub(crate) const INSTALL_DIR_32: &str = "/usr/local/lib/bones/i686";
+pub(crate) const DEV_LIB_64: &str = "target/release/libbones.so";
+pub(crate) const DEV_LIB_32: &str = "target/i686-unknown-linux-gnu/release/libbones.so";
+pub(crate) const DEV_DIR_64: &str = "target/release";
+pub(crate) const DEV_DIR_32: &str = "target/i686-unknown-linux-gnu/release";
 
 pub(crate) const FLATPAK_CMD: &str = "flatpak";
 pub(crate) const FLATPAK_RUN: &str = "run";
@@ -24,7 +41,50 @@ pub(crate) const FLATPAK_SHOW_META: &str = "--show-metadata";
 pub(crate) const CONFIG_SEP: char = ';';
 pub(crate) const ENV_SEP: char = ':';
 pub(crate) const POLL_BLOCK: i32 = -1;
+
 pub(crate) const HOT_RELOAD_KEY: &str = "hot_reload";
+pub(crate) const RES_SCALE_KEY: &str = "resolution_scale";
+pub(crate) const OPT_FP16_KEY: &str = "optimize_fp16";
+pub(crate) const OPT_DYNREN_KEY: &str = "optimize_dynamic_rendering";
+pub(crate) const OPT_PUSHDESC_KEY: &str = "optimize_push_descriptors";
+pub(crate) const OPT_SUBGROUP_KEY: &str = "optimize_subgroup_ops";
+pub(crate) const OPT_SYNC2_KEY: &str = "optimize_sync2";
+pub(crate) const OPT_SUBGROUP_EXT_TYPES_KEY: &str = "optimize_subgroup_extended_types";
+pub(crate) const OPT_SUBGROUP_UNIFORM_FLOW_KEY: &str = "optimize_subgroup_uniform_flow";
+pub(crate) const OPT_ASYNC_COMPUTE_KEY: &str = "optimize_async_compute";
+pub(crate) const COMPUTE_KEY: &str = "compute";
+pub(crate) const COMPUTE_X_KEY: &str = "compute_x";
+pub(crate) const COMPUTE_Y_KEY: &str = "compute_y";
+
+pub(crate) const RES_SCALE_MIN: f32 = 0.05;
+pub(crate) const RES_SCALE_DEFAULT: f32 = 1.0;
+pub(crate) const COMPUTE_X_DEFAULT: u32 = 8;
+pub(crate) const COMPUTE_Y_DEFAULT: u32 = 8;
+
+pub(crate) const EXT_FP16: &str = "VK_KHR_shader_float16_int8";
+pub(crate) const EXT_DYN_RENDER: &str = "VK_KHR_dynamic_rendering";
+pub(crate) const EXT_PUSH_DESC: &str = "VK_KHR_push_descriptor";
+pub(crate) const EXT_MUTABLE_FMT: &str = "VK_KHR_swapchain_mutable_format";
+pub(crate) const EXT_SYNCHRONIZATION2: &str = "VK_KHR_synchronization2";
+pub(crate) const EXT_SUBGROUP_EXT_TYPES: &str = "VK_KHR_shader_subgroup_extended_types";
+pub(crate) const EXT_SUBGROUP_UNIFORM_FLOW: &str = "VK_KHR_shader_subgroup_uniform_control_flow";
+pub(crate) const SUBGROUP_LABEL: &str = "Vulkan 1.1 subgroup operations";
+
+pub(crate) const GENERAL_BOOL_KEYS: [&str; 10] = [
+    HOT_RELOAD_KEY,
+    OPT_FP16_KEY,
+    OPT_DYNREN_KEY,
+    OPT_PUSHDESC_KEY,
+    OPT_SUBGROUP_KEY,
+    OPT_SYNC2_KEY,
+    OPT_SUBGROUP_EXT_TYPES_KEY,
+    OPT_SUBGROUP_UNIFORM_FLOW_KEY,
+    OPT_ASYNC_COMPUTE_KEY,
+    COMPUTE_KEY,
+];
+
+pub(crate) const GENERAL_FLOAT_KEYS: [&str; 1] = [RES_SCALE_KEY];
+pub(crate) const GENERAL_UINT_KEYS: [&str; 2] = [COMPUTE_X_KEY, COMPUTE_Y_KEY];
 
 pub(crate) const LOG_FD: i32 = 2;
 pub(crate) const US_PER_S: f32 = 1_000_000.0;
@@ -40,10 +100,16 @@ pub(crate) const LOG_LEVEL_WARN: i32 = 2;
 pub(crate) const LOG_LEVEL_INFO: i32 = 3;
 pub(crate) const DEFAULT_LOG_LEVEL: i32 = 2;
 
-#[cfg(target_arch = "x86_64")]
-pub(crate) const DLSYM_VERSION: &[u8] = b"GLIBC_2.2.5\0";
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) const DLSYM_VERSION: &[u8] = b"GLIBC_2.17\0";
+pub(crate) const PUSH_BYTES: u32 = 16;
+pub(crate) const LAYER_IFACE_VERSION: u32 = 2;
+pub(crate) const LAYER_LINK_INFO: i32 = 0;
+
+pub(crate) const NULL_OK: [&str; 4] = [
+    "vkCreateInstance",
+    "vkEnumerateInstanceVersion",
+    "vkEnumerateInstanceExtensionProperties",
+    "vkEnumerateInstanceLayerProperties",
+];
 
 pub(crate) const USAGE: &str = "usage: bones [PROFILE] -- COMMAND [ARGS...]\n  bones -- CMD            run CMD with the default profile (~/.config/bones/bones-config.toml)\n  bones NAME -- CMD       run CMD with profile ~/.config/bones/NAME-config.toml\n";
 
@@ -56,7 +122,97 @@ pub(crate) const HEAD: &str = r#"##bones default profile
 # look you find good.
 
 [general]
+# hot_reload to watch the config directory and recompile shader on save.
+# note: if any BONES_* general env var is set (BONES_CONFIG,
+# BONES_RESOLUTION_SCALE, BONES_OPTIMIZE_*, BONES_COMPUTE*) this file is
+# fully bypassed (not read, not written, not watched). hot reload requires
+# file mode.
 hot_reload = true
+
+# resolution_scale to scale the post-fx render target relative to the swap
+# chain. 1.0 = render at native resolution. 0.5 = render the entire
+# post-fx pipeline at half resolution then bilinear upscale to native at
+# the final blit. lower value gives big perf wins for expensive effect
+# stacks at the cost of softer image. minimum 0.05. takes effect at
+# swapchain creation; changing via hot reload requires the game to
+# re-create the swapchain (resize the window, toggle fullscreen, etc).
+# env: BONES_RESOLUTION_SCALE
+resolution_scale = 1.0
+
+# optimize_fp16 to enable VK_KHR_shader_float16_int8 at device creation
+# when the physical device supports it. if the device does not
+# advertise the extension you will see a log line saying so and the
+# layer keeps running with fp32. on by default. env: BONES_OPTIMIZE_FP16
+optimize_fp16 = true
+
+# optimize_dynamic_rendering to enable VK_KHR_dynamic_rendering at device
+# creation when supported. logged at device creation when not
+# available. on by default. env: BONES_OPTIMIZE_DYNAMIC_RENDERING
+optimize_dynamic_rendering = true
+
+# optimize_push_descriptors to enable VK_KHR_push_descriptor at device
+# creation when supported. logged when not available. on by default.
+# env: BONES_OPTIMIZE_PUSH_DESCRIPTORS
+optimize_push_descriptors = true
+
+# optimize_subgroup_ops to advertise that subgroup operations should be
+# used when available. checked against Vulkan 1.1 core subgroup
+# support at device creation. logged when not available. on by default.
+# env: BONES_OPTIMIZE_SUBGROUP_OPS
+optimize_subgroup_ops = true
+
+# optimize_sync2 to enable VK_KHR_synchronization2 at device creation
+# when supported. enables batched pipeline barriers via
+# vkCmdPipelineBarrier2 with 64-bit stage masks. reduces per-frame CPU
+# barrier overhead by collapsing the post-pass and end-of-frame
+# barrier pairs into single calls. logged when not available. on by
+# default. env: BONES_OPTIMIZE_SYNC2
+optimize_sync2 = true
+
+# optimize_subgroup_extended_types to enable
+# VK_KHR_shader_subgroup_extended_types at device creation when
+# supported. allows subgroup operations on 8/16/64-bit and bool types
+# in shaders. on by default. env: BONES_OPTIMIZE_SUBGROUP_EXTENDED_TYPES
+optimize_subgroup_extended_types = true
+
+# optimize_subgroup_uniform_flow to enable
+# VK_KHR_shader_subgroup_uniform_control_flow at device creation when
+# supported. declares that subgroup operations execute under uniform
+# control flow allowing more aggressive driver optimization. on by
+# default. env: BONES_OPTIMIZE_SUBGROUP_UNIFORM_FLOW
+optimize_subgroup_uniform_flow = true
+
+# optimize_async_compute to submit post-fx work on a dedicated async
+# compute queue family when one is available. lets the post-fx
+# dispatch run concurrently with the game next-frame rendering
+# instead of serially before present. requires the compute path
+# (compute = true), a queue family with COMPUTE but not GRAPHICS bit
+# that the application did not request, and swapchain creation that
+# permits CONCURRENT sharing across the involved families. silently
+# falls back to graphics-queue submission when any of these conditions
+# is not met. on by default. env: BONES_OPTIMIZE_ASYNC_COMPUTE
+optimize_async_compute = true
+
+# compute to use a compute shader instead of a fragment shader for the
+# ubershader pass. compute wins on most modern GPUs by skipping the
+# rasterizer and exploiting shared memory/subgroup paths. requires
+# the device feature shaderStorageImageWriteWithoutFormat and a swap
+# format that supports VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT. if either
+# is missing a log line is emitted and the layer falls back to the
+# fragment shader path for that swapchain. on by default.
+# env: BONES_COMPUTE
+compute = true
+
+# compute_x and compute_y to the workgroup size on each axis for the
+# compute shader. 8x8 is the safe default and is what we use unless
+# you know your hardware prefers something else (some AMD GPUs win
+# with 16x16; some NVIDIA GPUs prefer 32x4 for memory-coalesced
+# loads). product must not exceed the device max compute work group
+# invocations or we fall back to 8x8 with a log line. each axis is
+# clamped to the device max work group size on that axis.
+# env: BONES_COMPUTE_X, BONES_COMPUTE_Y
+compute_x = 8
+compute_y = 8
 
 [geometric]
 # warp texture coordinate before any pixel be sampled. all warps here are
@@ -912,242 +1068,201 @@ fps_hud = false
 crosshair_overlay = false
 "#;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectKind {
+    Geometric,
+    Denoise,
+    AntiAliasing,
+    Sharpening,
+    LocalContrast,
+    Blur,
+    ImageQuality,
+    Temporal,
+    Exposure,
+    Tonemapping,
+    WhiteBalance,
+    ColorGrading,
+    ChannelCurves,
+    ColorBalance,
+    SelectiveColor,
+    Stylization,
+    Accessibility,
+    Inline,
+    HardwareSimulation,
+    Overlay,
+}
+
 pub(crate) struct EffectDef {
     pub(crate) name: &'static str,
+    pub(crate) kind: EffectKind,
 }
 
 pub(crate) const REGISTRY: [EffectDef; 125] = [
-    EffectDef { name: "identity" },
-    EffectDef { name: "mirror_horizontal" },
-    EffectDef { name: "mirror_vertical" },
-    EffectDef { name: "rotate_90" },
-    EffectDef { name: "rotate_180" },
-    EffectDef { name: "rotate_270" },
-    EffectDef { name: "center_zoom" },
-    EffectDef { name: "polynomial_distort" },
-    EffectDef { name: "barrel_undistort" },
-    EffectDef { name: "fisheye_warp" },
-    EffectDef { name: "trapezoid_warp" },
-    EffectDef { name: "sharp_bilinear" },
-    EffectDef { name: "bilateral_denoise" },
-    EffectDef { name: "luma_edge_aa" },
-    EffectDef { name: "normal_filter_aa" },
-    EffectDef { name: "morphological_aa" },
-    EffectDef { name: "subpixel_aa" },
-    EffectDef { name: "contrast_adaptive_sharpen" },
-    EffectDef { name: "robust_contrast_sharpen" },
-    EffectDef { name: "edge_directed_sharpen" },
-    EffectDef { name: "laplacian_sharpen" },
-    EffectDef { name: "luminance_sharpen" },
-    EffectDef { name: "midtone_clarity" },
-    EffectDef { name: "falloff_sharpen" },
-    EffectDef { name: "power_curve_sharpen" },
-    EffectDef { name: "unsharp_mask" },
-    EffectDef { name: "local_contrast" },
-    EffectDef { name: "gaussian_blur" },
-    EffectDef { name: "box_blur" },
-    EffectDef { name: "bokeh_blur" },
-    EffectDef { name: "tilt_shift_blur" },
-    EffectDef { name: "radial_blur" },
-    EffectDef { name: "gradient_deband" },
-    EffectDef { name: "threshold_bloom" },
-    EffectDef { name: "ghost_flare" },
-    EffectDef { name: "neighborhood_clamp_aa" },
-    EffectDef { name: "motion_reject_denoise" },
-    EffectDef { name: "motion_detect_blur" },
-    EffectDef { name: "constant_blend_smooth" },
-    EffectDef { name: "shutter_angle_smooth" },
-    EffectDef { name: "spline_interp_smooth" },
-    EffectDef { name: "variance_decay_smooth" },
-    EffectDef { name: "dualrate_smooth" },
-    EffectDef { name: "luminance_gate_smooth" },
-    EffectDef { name: "contrast_gate_smooth" },
-    EffectDef { name: "gradient_gate_smooth" },
-    EffectDef { name: "sigma_clip_smooth" },
-    EffectDef { name: "mitchell_kernel_smooth" },
-    EffectDef { name: "ycocg_clip_smooth" },
-    EffectDef { name: "bilateral_history_smooth" },
-    EffectDef { name: "perceptual_chroma_smooth" },
-    EffectDef { name: "frequency_split_smooth" },
-    EffectDef { name: "horn_schunck_smooth" },
-    EffectDef { name: "convergent_accumulate" },
-    EffectDef { name: "dualwarp_flow_smooth" },
-    EffectDef { name: "variance_flow_accumulate" },
-    EffectDef { name: "edge_reconstruct_smooth" },
-    EffectDef { name: "linear_exposure" },
-    EffectDef { name: "aces_tonemap" },
-    EffectDef { name: "agx_tonemap" },
-    EffectDef { name: "reinhard_tonemap" },
-    EffectDef { name: "hable_tonemap" },
-    EffectDef { name: "lottes_tonemap" },
-    EffectDef { name: "uchimura_tonemap" },
-    EffectDef { name: "tony_tonemap" },
-    EffectDef { name: "khronos_tonemap" },
-    EffectDef { name: "neutral_white_balance" },
-    EffectDef { name: "warm_temperature" },
-    EffectDef { name: "cool_temperature" },
-    EffectDef { name: "saturation_contrast_grade" },
-    EffectDef { name: "levels_remap" },
-    EffectDef { name: "gamma_correct" },
-    EffectDef { name: "vibrance_boost" },
-    EffectDef { name: "hsl_transform" },
-    EffectDef { name: "split_tone" },
-    EffectDef { name: "lift_gamma_gain" },
-    EffectDef { name: "hermite_curves" },
-    EffectDef { name: "red_channel_curve" },
-    EffectDef { name: "green_channel_curve" },
-    EffectDef { name: "blue_channel_curve" },
-    EffectDef { name: "trizone_color_balance" },
-    EffectDef { name: "red_selective_saturate" },
-    EffectDef { name: "green_selective_saturate" },
-    EffectDef { name: "blue_selective_saturate" },
-    EffectDef { name: "dynamic_range_crush" },
-    EffectDef { name: "duotone_map" },
-    EffectDef { name: "color_wash_tint" },
-    EffectDef { name: "posterize_quantize" },
-    EffectDef { name: "bleach_bypass" },
-    EffectDef { name: "technicolor_process" },
-    EffectDef { name: "midpoint_contrast" },
-    EffectDef { name: "color_invert" },
-    EffectDef { name: "luminance_grayscale" },
-    EffectDef { name: "protanopia_simulation" },
-    EffectDef { name: "deuteranopia_simulation" },
-    EffectDef { name: "tritanopia_simulation" },
-    EffectDef { name: "protanopia_correct" },
-    EffectDef { name: "deuteranopia_correct" },
-    EffectDef { name: "tritanopia_correct" },
-    EffectDef { name: "gaussian_grain" },
-    EffectDef { name: "chromatic_aberration" },
-    EffectDef { name: "red_halation" },
-    EffectDef { name: "anamorphic_streak" },
-    EffectDef { name: "radial_vignette" },
-    EffectDef { name: "cinematic_letterbox" },
-    EffectDef { name: "ordered_dither" },
-    EffectDef { name: "ps1_simulation" },
-    EffectDef { name: "saturn_simulation" },
-    EffectDef { name: "n64_simulation" },
-    EffectDef { name: "dreamcast_simulation" },
-    EffectDef { name: "ps2_simulation" },
-    EffectDef { name: "xbox_simulation" },
-    EffectDef { name: "psp_simulation" },
-    EffectDef { name: "ps3_simulation" },
-    EffectDef { name: "xbox360_simulation" },
-    EffectDef { name: "crt_simulation" },
-    EffectDef { name: "phosphor_amber" },
-    EffectDef { name: "phosphor_green" },
-    EffectDef { name: "phosphor_red" },
-    EffectDef { name: "scanline_darken" },
-    EffectDef { name: "oled_simulation" },
-    EffectDef { name: "vhs_simulation" },
-    EffectDef { name: "lcd_subpixel" },
-    EffectDef { name: "fps_hud" },
-    EffectDef { name: "crosshair_overlay" },
+    EffectDef { name: "identity", kind: EffectKind::Geometric },
+    EffectDef { name: "mirror_horizontal", kind: EffectKind::Geometric },
+    EffectDef { name: "mirror_vertical", kind: EffectKind::Geometric },
+    EffectDef { name: "rotate_90", kind: EffectKind::Geometric },
+    EffectDef { name: "rotate_180", kind: EffectKind::Geometric },
+    EffectDef { name: "rotate_270", kind: EffectKind::Geometric },
+    EffectDef { name: "center_zoom", kind: EffectKind::Geometric },
+    EffectDef { name: "polynomial_distort", kind: EffectKind::Geometric },
+    EffectDef { name: "barrel_undistort", kind: EffectKind::Geometric },
+    EffectDef { name: "fisheye_warp", kind: EffectKind::Geometric },
+    EffectDef { name: "trapezoid_warp", kind: EffectKind::Geometric },
+    EffectDef { name: "sharp_bilinear", kind: EffectKind::Geometric },
+    EffectDef { name: "bilateral_denoise", kind: EffectKind::Denoise },
+    EffectDef { name: "luma_edge_aa", kind: EffectKind::AntiAliasing },
+    EffectDef { name: "normal_filter_aa", kind: EffectKind::AntiAliasing },
+    EffectDef { name: "morphological_aa", kind: EffectKind::AntiAliasing },
+    EffectDef { name: "subpixel_aa", kind: EffectKind::AntiAliasing },
+    EffectDef { name: "contrast_adaptive_sharpen", kind: EffectKind::Sharpening },
+    EffectDef { name: "robust_contrast_sharpen", kind: EffectKind::Sharpening },
+    EffectDef { name: "edge_directed_sharpen", kind: EffectKind::Sharpening },
+    EffectDef { name: "laplacian_sharpen", kind: EffectKind::Sharpening },
+    EffectDef { name: "luminance_sharpen", kind: EffectKind::Sharpening },
+    EffectDef { name: "midtone_clarity", kind: EffectKind::Sharpening },
+    EffectDef { name: "falloff_sharpen", kind: EffectKind::Sharpening },
+    EffectDef { name: "power_curve_sharpen", kind: EffectKind::Sharpening },
+    EffectDef { name: "unsharp_mask", kind: EffectKind::Sharpening },
+    EffectDef { name: "local_contrast", kind: EffectKind::LocalContrast },
+    EffectDef { name: "gaussian_blur", kind: EffectKind::Blur },
+    EffectDef { name: "box_blur", kind: EffectKind::Blur },
+    EffectDef { name: "bokeh_blur", kind: EffectKind::Blur },
+    EffectDef { name: "tilt_shift_blur", kind: EffectKind::Blur },
+    EffectDef { name: "radial_blur", kind: EffectKind::Blur },
+    EffectDef { name: "gradient_deband", kind: EffectKind::ImageQuality },
+    EffectDef { name: "threshold_bloom", kind: EffectKind::ImageQuality },
+    EffectDef { name: "ghost_flare", kind: EffectKind::ImageQuality },
+    EffectDef { name: "neighborhood_clamp_aa", kind: EffectKind::Temporal },
+    EffectDef { name: "motion_reject_denoise", kind: EffectKind::Temporal },
+    EffectDef { name: "motion_detect_blur", kind: EffectKind::Temporal },
+    EffectDef { name: "constant_blend_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "shutter_angle_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "spline_interp_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "variance_decay_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "dualrate_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "luminance_gate_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "contrast_gate_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "gradient_gate_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "sigma_clip_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "mitchell_kernel_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "ycocg_clip_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "bilateral_history_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "perceptual_chroma_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "frequency_split_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "horn_schunck_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "convergent_accumulate", kind: EffectKind::Temporal },
+    EffectDef { name: "dualwarp_flow_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "variance_flow_accumulate", kind: EffectKind::Temporal },
+    EffectDef { name: "edge_reconstruct_smooth", kind: EffectKind::Temporal },
+    EffectDef { name: "linear_exposure", kind: EffectKind::Exposure },
+    EffectDef { name: "aces_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "agx_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "reinhard_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "hable_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "lottes_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "uchimura_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "tony_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "khronos_tonemap", kind: EffectKind::Tonemapping },
+    EffectDef { name: "neutral_white_balance", kind: EffectKind::WhiteBalance },
+    EffectDef { name: "warm_temperature", kind: EffectKind::WhiteBalance },
+    EffectDef { name: "cool_temperature", kind: EffectKind::WhiteBalance },
+    EffectDef { name: "saturation_contrast_grade", kind: EffectKind::ColorGrading },
+    EffectDef { name: "levels_remap", kind: EffectKind::ColorGrading },
+    EffectDef { name: "gamma_correct", kind: EffectKind::ColorGrading },
+    EffectDef { name: "vibrance_boost", kind: EffectKind::ColorGrading },
+    EffectDef { name: "hsl_transform", kind: EffectKind::ColorGrading },
+    EffectDef { name: "split_tone", kind: EffectKind::ColorGrading },
+    EffectDef { name: "lift_gamma_gain", kind: EffectKind::ColorGrading },
+    EffectDef { name: "hermite_curves", kind: EffectKind::ColorGrading },
+    EffectDef { name: "red_channel_curve", kind: EffectKind::ChannelCurves },
+    EffectDef { name: "green_channel_curve", kind: EffectKind::ChannelCurves },
+    EffectDef { name: "blue_channel_curve", kind: EffectKind::ChannelCurves },
+    EffectDef { name: "trizone_color_balance", kind: EffectKind::ColorBalance },
+    EffectDef { name: "red_selective_saturate", kind: EffectKind::SelectiveColor },
+    EffectDef { name: "green_selective_saturate", kind: EffectKind::SelectiveColor },
+    EffectDef { name: "blue_selective_saturate", kind: EffectKind::SelectiveColor },
+    EffectDef { name: "dynamic_range_crush", kind: EffectKind::Stylization },
+    EffectDef { name: "duotone_map", kind: EffectKind::Stylization },
+    EffectDef { name: "color_wash_tint", kind: EffectKind::Stylization },
+    EffectDef { name: "posterize_quantize", kind: EffectKind::Stylization },
+    EffectDef { name: "bleach_bypass", kind: EffectKind::Stylization },
+    EffectDef { name: "technicolor_process", kind: EffectKind::Stylization },
+    EffectDef { name: "midpoint_contrast", kind: EffectKind::Stylization },
+    EffectDef { name: "color_invert", kind: EffectKind::Stylization },
+    EffectDef { name: "luminance_grayscale", kind: EffectKind::Stylization },
+    EffectDef { name: "protanopia_simulation", kind: EffectKind::Accessibility },
+    EffectDef { name: "deuteranopia_simulation", kind: EffectKind::Accessibility },
+    EffectDef { name: "tritanopia_simulation", kind: EffectKind::Accessibility },
+    EffectDef { name: "protanopia_correct", kind: EffectKind::Accessibility },
+    EffectDef { name: "deuteranopia_correct", kind: EffectKind::Accessibility },
+    EffectDef { name: "tritanopia_correct", kind: EffectKind::Accessibility },
+    EffectDef { name: "gaussian_grain", kind: EffectKind::Inline },
+    EffectDef { name: "chromatic_aberration", kind: EffectKind::Inline },
+    EffectDef { name: "red_halation", kind: EffectKind::Inline },
+    EffectDef { name: "anamorphic_streak", kind: EffectKind::Inline },
+    EffectDef { name: "radial_vignette", kind: EffectKind::Inline },
+    EffectDef { name: "cinematic_letterbox", kind: EffectKind::Inline },
+    EffectDef { name: "ordered_dither", kind: EffectKind::Inline },
+    EffectDef { name: "ps1_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "saturn_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "n64_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "dreamcast_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "ps2_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "xbox_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "psp_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "ps3_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "xbox360_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "crt_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "phosphor_amber", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "phosphor_green", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "phosphor_red", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "scanline_darken", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "oled_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "vhs_simulation", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "lcd_subpixel", kind: EffectKind::HardwareSimulation },
+    EffectDef { name: "fps_hud", kind: EffectKind::Overlay },
+    EffectDef { name: "crosshair_overlay", kind: EffectKind::Overlay },
 ];
 
-pub(crate) const TRI_VERTS: [f32; 6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
-pub(crate) const VBO_COMPONENTS: i32 = 2;
-pub(crate) const FULLSCREEN_TRI_VERTS: i32 = 3;
-
-pub(crate) const GL_TEXTURE_2D: u32 = 0x0DE1;
-pub(crate) const GL_TEXTURE0: u32 = 0x84C0;
-pub(crate) const GL_TEXTURE1: u32 = 0x84C1;
-pub(crate) const GL_RGBA8: i32 = 0x8058;
-pub(crate) const GL_RGBA: u32 = 0x1908;
-pub(crate) const GL_UNSIGNED_BYTE: u32 = 0x1401;
-pub(crate) const GL_LINEAR: i32 = 0x2601;
-pub(crate) const GL_CLAMP_TO_EDGE: i32 = 0x812F;
-pub(crate) const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
-pub(crate) const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
-pub(crate) const GL_TEXTURE_WRAP_S: u32 = 0x2802;
-pub(crate) const GL_TEXTURE_WRAP_T: u32 = 0x2803;
-pub(crate) const GL_FRAMEBUFFER: u32 = 0x8D40;
-pub(crate) const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
-pub(crate) const GL_DRAW_FRAMEBUFFER: u32 = 0x8CA9;
-pub(crate) const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
-pub(crate) const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
-pub(crate) const GL_FRAGMENT_SHADER: u32 = 0x8B30;
-pub(crate) const GL_VERTEX_SHADER: u32 = 0x8B31;
-pub(crate) const GL_COMPILE_STATUS: u32 = 0x8B81;
-pub(crate) const GL_LINK_STATUS: u32 = 0x8B82;
-pub(crate) const GL_ARRAY_BUFFER: u32 = 0x8892;
-pub(crate) const GL_ARRAY_BUFFER_BINDING: u32 = 0x8894;
-pub(crate) const GL_STATIC_DRAW: u32 = 0x88E4;
-pub(crate) const GL_FLOAT: u32 = 0x1406;
-pub(crate) const GL_TRIANGLES: u32 = 0x0004;
-pub(crate) const GL_VIEWPORT: u32 = 0x0BA2;
-pub(crate) const GL_SCISSOR_BOX: u32 = 0x0C10;
-pub(crate) const GL_CURRENT_PROGRAM: u32 = 0x8B8D;
-pub(crate) const GL_ACTIVE_TEXTURE: u32 = 0x84E0;
-pub(crate) const GL_TEXTURE_BINDING_2D: u32 = 0x8069;
-pub(crate) const GL_READ_FRAMEBUFFER_BINDING: u32 = 0x8CAA;
-pub(crate) const GL_DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
-pub(crate) const GL_PIXEL_UNPACK_BUFFER: u32 = 0x88EC;
-pub(crate) const GL_PIXEL_UNPACK_BUFFER_BINDING: u32 = 0x88EF;
-pub(crate) const GL_COLOR_WRITEMASK: u32 = 0x0C23;
-pub(crate) const GL_COLOR_CLEAR_VALUE: u32 = 0x0C22;
-pub(crate) const GL_DEPTH_WRITEMASK: u32 = 0x0B72;
-pub(crate) const GL_STENCIL_WRITEMASK: u32 = 0x0B98;
-pub(crate) const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
-pub(crate) const GL_UNPACK_ROW_LENGTH: u32 = 0x0CF2;
-pub(crate) const GL_BLEND_SRC_RGB: u32 = 0x80C9;
-pub(crate) const GL_BLEND_DST_RGB: u32 = 0x80C8;
-pub(crate) const GL_BLEND_SRC_ALPHA: u32 = 0x80CB;
-pub(crate) const GL_BLEND_DST_ALPHA: u32 = 0x80CA;
-pub(crate) const GL_BLEND_EQUATION_RGB: u32 = 0x8009;
-pub(crate) const GL_BLEND_EQUATION_ALPHA: u32 = 0x883D;
-pub(crate) const GL_DEPTH_TEST: u32 = 0x0B71;
-pub(crate) const GL_BLEND: u32 = 0x0BE2;
-pub(crate) const GL_CULL_FACE: u32 = 0x0B44;
-pub(crate) const GL_SCISSOR_TEST: u32 = 0x0C11;
-pub(crate) const GL_STENCIL_TEST: u32 = 0x0B90;
-pub(crate) const GL_FRAMEBUFFER_SRGB: u32 = 0x8DB9;
-pub(crate) const GL_RASTERIZER_DISCARD: u32 = 0x8C89;
-pub(crate) const GL_ALPHA_TEST: u32 = 0x0BC0;
-pub(crate) const GL_COLOR_LOGIC_OP: u32 = 0x0BF2;
-pub(crate) const GL_VERTEX_PROGRAM_ARB: u32 = 0x8620;
-pub(crate) const GL_FRAGMENT_PROGRAM_ARB: u32 = 0x8804;
-pub(crate) const GL_VERTEX_ATTRIB_ARRAY_ENABLED: u32 = 0x8622;
-pub(crate) const GL_VERTEX_ARRAY_BINDING: u32 = 0x85B5;
-pub(crate) const GL_VERSION: u32 = 0x1F02;
-pub(crate) const GLX_WIDTH: i32 = 0x801D;
-pub(crate) const GLX_HEIGHT: i32 = 0x801E;
-pub(crate) const EGL_WIDTH: i32 = 0x3057;
-pub(crate) const EGL_HEIGHT: i32 = 0x3056;
-
-pub(crate) const PUSH_BYTES: u32 = 16;
-pub(crate) const LAYER_IFACE_VERSION: u32 = 2;
-pub(crate) const LAYER_LINK_INFO: i32 = 0;
-
-pub(crate) const NULL_OK: [&str; 4] = [
-    "vkCreateInstance",
-    "vkEnumerateInstanceVersion",
-    "vkEnumerateInstanceExtensionProperties",
-    "vkEnumerateInstanceLayerProperties",
-];
-
-pub(crate) const VK_HEADER: &str = "#define VULKAN_API 1\nlayout(push_constant) uniform PushBlock { vec2 res; float time; float fps; } pc;\n#define u_resolution pc.res\n#define u_time pc.time\n#define u_fps pc.fps\nlayout(location=0) out vec4 frag_out;";
-
-pub(crate) const VERT_VK_SRC: &str = r#"#version 450
+pub(crate) const VERT_SRC: &str = r#"#version 460
 void main() {
     vec2 vk_pos = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
     gl_Position = vec4(vk_pos * 2.0 - 1.0, 0.0, 1.0);
 }
 "#;
 
-pub(crate) const VERT_SRC: &str = r#"#version 130
-in vec2 a_pos;
-void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
-"#;
-
-pub(crate) const UBER_SRC: &str = r#"#version 130
-
-uniform sampler2D u_input;
-uniform sampler2D u_history;
-uniform vec2 u_resolution;
-uniform float u_time;
-uniform float u_fps;
-
-out vec4 frag_out;
+pub(crate) const UBER_SRC: &str = r#"#version 460
+#ifdef BONES_HAS_SUBGROUP_EXT_TYPES
+#extension GL_EXT_shader_subgroup_extended_types_int8 : enable
+#extension GL_EXT_shader_subgroup_extended_types_int16 : enable
+#extension GL_EXT_shader_subgroup_extended_types_int64 : enable
+#extension GL_EXT_shader_subgroup_extended_types_float16 : enable
+#endif
+#ifdef COMPUTE_PATH
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = LOCAL_SIZE_Y, local_size_z = 1) in;
+layout(set=0, binding=0) uniform sampler2D u_input;
+layout(set=0, binding=1) uniform sampler2D u_history;
+layout(set=0, binding=2, rgba8) uniform writeonly image2D u_output;
+layout(push_constant) uniform PushBlock { vec2 res; float time; float fps; } pc;
+#define u_resolution pc.res
+#define u_time pc.time
+#define u_fps pc.fps
+#define BONES_FRAGCOORD vec2(gl_GlobalInvocationID.xy) + vec2(0.5)
+#define BONES_WRITE_OUT(rgb) imageStore(u_output, ivec2(gl_GlobalInvocationID.xy), vec4(clamp(rgb, 0.0, 1.0), 1.0))
+#define BONES_EARLY_OUT if (any(greaterThanEqual(gl_GlobalInvocationID.xy, uvec2(u_resolution)))) return
+#else
+layout(set=0, binding=0) uniform sampler2D u_input;
+layout(set=0, binding=1) uniform sampler2D u_history;
+layout(push_constant) uniform PushBlock { vec2 res; float time; float fps; } pc;
+#define u_resolution pc.res
+#define u_time pc.time
+#define u_fps pc.fps
+layout(location=0) out vec4 frag_out;
+#define BONES_FRAGCOORD gl_FragCoord.xy
+#define BONES_WRITE_OUT(rgb) frag_out = vec4(clamp(rgb, 0.0, 1.0), 1.0)
+#define BONES_EARLY_OUT
+#endif
 
 const vec3 LUMA_BT601 = vec3(0.299, 0.587, 0.114);
 const vec3 LUMA_BT709 = vec3(0.2126, 0.7152, 0.0722);
@@ -1361,8 +1476,10 @@ const vec3 ZERO3 = vec3(0.0);
 #endif
 
 void main() {
+    BONES_EARLY_OUT;
+    vec2 frag_coord = BONES_FRAGCOORD;
     vec2 inv = 1.0 / u_resolution;
-    vec2 v_uv = gl_FragCoord.xy * inv;
+    vec2 v_uv = frag_coord * inv;
     float res_scale = u_resolution.y * 0.0009259259;
 
     #ifdef ENABLE_MIRROR_HORIZONTAL
@@ -1766,7 +1883,7 @@ void main() {
                 + texture(u_input, v_uv + vec2(tx * 3.0, 0.0)).rgb
                 + texture(u_input, v_uv - vec2(tx * 3.0, 0.0)).rgb
                 + texture(u_input, v_uv + vec2(tx * 4.0, 0.0)).rgb
-                + texture(u_input, v_uv - vec2(tx * 4.0, 0.0)).rgb;
+                - texture(u_input, v_uv - vec2(tx * 4.0, 0.0)).rgb;
             c = mix(c, ts * 0.1111111, td);
         }
     #endif
@@ -2480,13 +2597,13 @@ void main() {
     #endif
 
     #ifdef ENABLE_ORDERED_DITHER
-        c = c + vec3(bayer_signed(gl_FragCoord.xy)) * 0.01;
+        c = c + vec3(bayer_signed(frag_coord)) * 0.01;
     #endif
 
     c = clamp(c, 0.0, 1.0);
 
     #ifdef ENABLE_PS1_SIMULATION
-        c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.025) * 0.03225806;
+        c = floor(c * 31.0 + 0.5 + bayer_signed(frag_coord) * 0.025) * 0.03225806;
     #endif
 
     #ifdef ENABLE_SATURN_SIMULATION
@@ -2498,7 +2615,7 @@ void main() {
             float sat_g = dot(c, LUMA_BT601);
             c = mix(vec3(sat_g), c, 0.75);
             c = c * vec3(1.05, 0.97, 0.85);
-            c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.02) * 0.03225806;
+            c = floor(c * 31.0 + 0.5 + bayer_signed(frag_coord) * 0.02) * 0.03225806;
         }
     #endif
 
@@ -2507,7 +2624,7 @@ void main() {
             vec2 n64_d2 = v_uv - HALF2;
             c = mix(c, vec3(0.6, 0.65, 0.75), smoothstep(0.04, 0.5625, dot(n64_d2, n64_d2)) * 0.25);
             c = c * vec3(1.06, 1.02, 0.9);
-            c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.015) * 0.03225806;
+            c = floor(c * 31.0 + 0.5 + bayer_signed(frag_coord) * 0.015) * 0.03225806;
         }
     #endif
 
@@ -2548,7 +2665,7 @@ void main() {
             float psp_dl = dot(c, LUMA_BT601);
             float psp_dark_q = mix(8.0, 31.0, smoothstep(0.0, 0.3, psp_dl));
             c = floor(c * psp_dark_q + 0.5) / psp_dark_q;
-            c = floor(c * 31.0 + 0.5 + bayer_signed(gl_FragCoord.xy) * 0.018) * 0.03225806;
+            c = floor(c * 31.0 + 0.5 + bayer_signed(frag_coord) * 0.018) * 0.03225806;
             float psp_g = dot(c, LUMA_BT601);
             c = mix(vec3(psp_g), c, 0.88);
         }
@@ -2637,7 +2754,7 @@ void main() {
     #ifdef ENABLE_LCD_SUBPIXEL
         {
             float lc = 3.0 * res_scale;
-            vec2 lp = fract(gl_FragCoord.xy / lc);
+            vec2 lp = fract(frag_coord / lc);
             float lm = step(0.2, lp.x) * step(0.2, lp.y);
             c = c * mix(0.6, 1.0, lm) * 1.1;
         }
@@ -2646,11 +2763,7 @@ void main() {
     #ifdef ENABLE_FPS_HUD
         {
             float hs = 26.0 * res_scale;
-            #ifdef VULKAN_API
-                vec2 hu = v_uv;
-            #else
-                vec2 hu = vec2(v_uv.x, 1.0 - v_uv.y);
-            #endif
+            vec2 hu = v_uv;
             vec2 raw_hp = (hu - vec2(0.012)) * u_resolution / hs;
             float in_x = step(-0.6, raw_hp.x) * step(raw_hp.x, 3.5);
             float in_y = step(-0.6, raw_hp.y) * step(raw_hp.y, 1.6);
@@ -2684,7 +2797,7 @@ void main() {
     #ifdef ENABLE_CROSSHAIR_OVERLAY
         {
             float cs = res_scale;
-            vec2 cp = abs(gl_FragCoord.xy - u_resolution * 0.5);
+            vec2 cp = abs(frag_coord - u_resolution * 0.5);
             float in_box = step(max(cp.x, cp.y), 16.0 * cs);
             float d_dot = max(0.0, length(cp) - 0.5 * cs);
             vec2 pa_h = cp - vec2(4.0 * cs, 0.0);
@@ -2701,6 +2814,6 @@ void main() {
         }
     #endif
 
-    frag_out = vec4(clamp(c, 0.0, 1.0), 1.0);
+    BONES_WRITE_OUT(c);
 }
 "#;

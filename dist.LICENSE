@@ -1,4 +1,4 @@
-bones — GLSL ubershader post‑processing tool for Linux games (OpenGL · OpenGL ES · Vulkan).
+bones — Performance first Vulkan ubershader Post Processing layer for Linux.
 Copyright (C) 2026 pythonlover02
 
 This program is free software: you can redistribute it and/or modify

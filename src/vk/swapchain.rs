@@ -65,12 +65,17 @@ pub(crate) struct PostFxResources {
     pub(crate) tex_history: vk::Image,
     pub(crate) tex_history_mem: vk::DeviceMemory,
     pub(crate) tex_history_view: vk::ImageView,
+    pub(crate) tex_upscaled: vk::Image,
+    pub(crate) tex_upscaled_mem: vk::DeviceMemory,
+    pub(crate) tex_upscaled_view: vk::ImageView,
     pub(crate) history_init: bool,
     pub(crate) submit_res: Option<VkSubmitResources>,
     pub(crate) gen: i32,
     pub(crate) sample_format: vk::Format,
     pub(crate) compute_x: u32,
     pub(crate) compute_y: u32,
+    pub(crate) can_blit: bool,
+    pub(crate) filter: vk::Filter,
 }
 
 #[allow(dead_code)]
@@ -388,6 +393,9 @@ struct FxBuilder<'a> {
     tex_history: vk::Image,
     tex_history_mem: vk::DeviceMemory,
     tex_history_view: vk::ImageView,
+    tex_upscaled: vk::Image,
+    tex_upscaled_mem: vk::DeviceMemory,
+    tex_upscaled_view: vk::ImageView,
     desc_sets: Vec<vk::DescriptorSet>,
     armed: bool,
 }
@@ -448,6 +456,7 @@ impl<'a> Drop for FxBuilder<'a> {
                 destroy_view_list(dev, &self.swap_views);
                 destroy_builder_tex(dev, self.tex_output, self.tex_output_mem, self.tex_output_view);
                 destroy_builder_tex(dev, self.tex_history, self.tex_history_mem, self.tex_history_view);
+                destroy_builder_tex(dev, self.tex_upscaled, self.tex_upscaled_mem, self.tex_upscaled_view);
             }
         }
     }
@@ -471,6 +480,9 @@ fn new_fx_builder(dev: &VkDevState, mode: PostFxMode) -> FxBuilder<'_> {
         tex_history: vk::Image::null(),
         tex_history_mem: vk::DeviceMemory::null(),
         tex_history_view: vk::ImageView::null(),
+        tex_upscaled: vk::Image::null(),
+        tex_upscaled_mem: vk::DeviceMemory::null(),
+        tex_upscaled_view: vk::ImageView::null(),
         desc_sets: Vec::new(),
         armed: true,
     }
@@ -485,6 +497,24 @@ fn finalize_fx(
     use_push_desc: bool,
     submit_family: u32,
 ) -> PostFxResources {
+    let (can_blit, filter) = match insts_get(b.dev.instance_handle) {
+        Some(inst) => {
+            let props = unsafe { inst.instance.get_physical_device_format_properties(b.dev.phys, sample_format) };
+            let fmt_blit = props.optimal_tiling_features.contains(vk::FormatFeatureFlags::BLIT_DST)
+                && props.optimal_tiling_features.contains(vk::FormatFeatureFlags::BLIT_SRC);
+            let f = match props.optimal_tiling_features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR) {
+                true => vk::Filter::LINEAR,
+                false => vk::Filter::NEAREST,
+            };
+            let q_props = unsafe { inst.instance.get_physical_device_queue_family_properties(b.dev.phys) };
+            let q_blit = q_props.get(submit_family as usize)
+                .map(|p| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+                .unwrap_or(false);
+            (fmt_blit && q_blit, f)
+        }
+        None => (false, vk::Filter::NEAREST),
+    };
+
     let r = PostFxResources {
         mode: b.mode,
         use_push_desc,
@@ -505,12 +535,17 @@ fn finalize_fx(
         tex_history: b.tex_history,
         tex_history_mem: b.tex_history_mem,
         tex_history_view: b.tex_history_view,
+        tex_upscaled: b.tex_upscaled,
+        tex_upscaled_mem: b.tex_upscaled_mem,
+        tex_upscaled_view: b.tex_upscaled_view,
         history_init: false,
         submit_res: None,
         gen: GENERATION.load(Ordering::Relaxed),
         sample_format,
         compute_x: wg_x,
         compute_y: wg_y,
+        can_blit,
+        filter,
     };
     b.armed = false;
     r
@@ -529,10 +564,11 @@ fn spv_or_fail(spv: Vec<u32>, label: &str) -> Result<Vec<u32>, ()> {
     }
 }
 
-fn pick_submit_family(dev: &VkDevState, mode: PostFxMode, present_family: u32) -> u32 {
-    match (mode, dev.caps.async_compute_family) {
-        (PostFxMode::Compute, Some(f)) => f,
-        (_, _) => present_family,
+fn pick_submit_family(dev: &VkDevState, mode: PostFxMode, present_family: u32, extent: vk::Extent2D, fx_extent: vk::Extent2D) -> u32 {
+    let is_native = extent.width == fx_extent.width && extent.height == fx_extent.height;
+    match (mode, dev.caps.async_compute_family, is_native) {
+        (PostFxMode::Compute, Some(f), true) => f,
+        (_, _, _) => present_family,
     }
 }
 
@@ -563,6 +599,14 @@ fn build_fx_compute(
     b.tex_history = th_img;
     b.tex_history_mem = th_mem;
     b.tex_history_view = th_view;
+
+    let (up_img, up_mem, up_view) = match st.extent.width == fx_extent.width && st.extent.height == fx_extent.height {
+        true => (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
+        false => create_offscreen_image(dev, st.extent, format)?,
+    };
+    b.tex_upscaled = up_img;
+    b.tex_upscaled_mem = up_mem;
+    b.tex_upscaled_view = up_view;
 
     b.swap_views = create_all_swap_views(dev, &st.images, st.view_format)?;
     match use_push_desc {
@@ -609,6 +653,14 @@ fn build_fx_fragment(
     b.tex_history_mem = th_mem;
     b.tex_history_view = th_view;
 
+    let (up_img, up_mem, up_view) = match st.extent.width == fx_extent.width && st.extent.height == fx_extent.height {
+        true => (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
+        false => create_offscreen_image(dev, st.extent, format)?,
+    };
+    b.tex_upscaled = up_img;
+    b.tex_upscaled_mem = up_mem;
+    b.tex_upscaled_view = up_view;
+
     b.swap_views = create_all_swap_views(dev, &st.images, st.view_format)?;
     match use_push_desc {
         false => {
@@ -652,7 +704,7 @@ fn build_fx_resources(dev: &VkDevState, st: &VkSwapState, present_family: u32) -
     let mode = choose_mode(dev, &s, st.view_format);
     let needs_history = temporal_enabled(&s, &REGISTRY);
     let use_push_desc = dev.caps.pushdesc && dev.push_desc_fp.is_some();
-    let submit_family = pick_submit_family(dev, mode, present_family);
+    let submit_family = pick_submit_family(dev, mode, present_family, st.extent, st.fx_extent);
     match mode {
         PostFxMode::Compute => build_fx_compute(dev, st, needs_history, use_push_desc, submit_family),
         PostFxMode::Fragment => build_fx_fragment(dev, st, needs_history, use_push_desc, submit_family),
@@ -842,6 +894,9 @@ fn destroy_fx_resources(dev: &VkDevState, fx: &mut PostFxResources) {
         dev.device.destroy_image_view(fx.tex_history_view, None);
         dev.device.destroy_image(fx.tex_history, None);
         dev.device.free_memory(fx.tex_history_mem, None);
+        dev.device.destroy_image_view(fx.tex_upscaled_view, None);
+        dev.device.destroy_image(fx.tex_upscaled, None);
+        dev.device.free_memory(fx.tex_upscaled_mem, None);
         dev.device.destroy_pipeline(fx.pipeline, None);
         dev.device.destroy_pipeline_layout(fx.pipeline_layout, None);
         dev.device.destroy_descriptor_set_layout(fx.desc_layout, None);

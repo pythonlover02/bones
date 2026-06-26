@@ -40,10 +40,13 @@ struct PostfxFrame {
     submit_queue: vk::Queue,
     tex_output: vk::Image,
     tex_history: vk::Image,
+    tex_upscaled: vk::Image,
     need_history_init: bool,
     needs_history: bool,
     compute_x: u32,
     compute_y: u32,
+    can_blit: bool,
+    filter: vk::Filter,
 }
 
 struct BarrierDesc {
@@ -215,12 +218,12 @@ fn make_copy_region(extent: vk::Extent2D) -> vk::ImageCopy {
 
 fn call_blit_image(
     dev: &VkDevState, cb: vk::CommandBuffer, src: vk::Image, dst: vk::Image,
-    src_extent: vk::Extent2D, dst_extent: vk::Extent2D,
+    src_extent: vk::Extent2D, dst_extent: vk::Extent2D, filter: vk::Filter,
 ) {
     let region = make_blit_region(src_extent, dst_extent);
     unsafe {
         dev.device.cmd_blit_image(cb, src, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            dst, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region], vk::Filter::LINEAR)
+            dst, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region], filter)
     };
 }
 
@@ -234,11 +237,31 @@ fn call_copy_image(dev: &VkDevState, cb: vk::CommandBuffer, src: vk::Image, dst:
 
 fn write_to_swap(
     dev: &VkDevState, cb: vk::CommandBuffer, src: vk::Image, dst: vk::Image,
-    src_extent: vk::Extent2D, dst_extent: vk::Extent2D,
+    upscaled_img: vk::Image,
+    src_extent: vk::Extent2D, dst_extent: vk::Extent2D, can_blit: bool, filter: vk::Filter,
 ) {
-    match src_extent.width == dst_extent.width && src_extent.height == dst_extent.height {
-        true => call_copy_image(dev, cb, src, dst, dst_extent),
-        false => call_blit_image(dev, cb, src, dst, src_extent, dst_extent),
+    match (src_extent.width == dst_extent.width && src_extent.height == dst_extent.height, can_blit) {
+        (true, _) => call_copy_image(dev, cb, src, dst, dst_extent),
+        (false, true) => {
+            barrier(dev, cb, upscaled_img,
+                vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
+            call_blit_image(dev, cb, src, upscaled_img, src_extent, dst_extent, filter);
+            barrier(dev, cb, upscaled_img,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::TRANSFER_READ,
+                vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::TRANSFER);
+            call_copy_image(dev, cb, upscaled_img, dst, dst_extent);
+        }
+        (false, false) => {
+            log_at(LogLevel::Warn, "format lacks BLIT support, falling back to unscaled copy");
+            let safe_extent = vk::Extent2D {
+                width: src_extent.width.min(dst_extent.width),
+                height: src_extent.height.min(dst_extent.height),
+            };
+            call_copy_image(dev, cb, src, dst, safe_extent);
+        }
     }
 }
 
@@ -292,10 +315,13 @@ fn extract_postfx_frame(
         submit_queue,
         tex_output: fx.tex_output,
         tex_history: fx.tex_history,
+        tex_upscaled: fx.tex_upscaled,
         need_history_init,
         needs_history: fx.needs_history,
         compute_x: fx.compute_x,
         compute_y: fx.compute_y,
+        can_blit: fx.can_blit,
+        filter: fx.filter,
     })
 }
 
@@ -542,7 +568,7 @@ fn record_postfx_commands(dev: &VkDevState, frame: &PostfxFrame) {
         PostFxMode::Compute => record_compute_pass(dev, frame, push_bytes),
     }
 
-    write_to_swap(dev, cb, frame.tex_output, img, frame.fx_extent, frame.extent);
+    write_to_swap(dev, cb, frame.tex_output, img, frame.tex_upscaled, frame.fx_extent, frame.extent, frame.can_blit, frame.filter);
     record_end_of_frame_transitions(dev, frame);
 
     unsafe { let _ = dev.device.end_command_buffer(cb); }

@@ -13,7 +13,7 @@ Bones is a realtime post-processing layer for Vulkan games on Linux, written in 
 - **One shader, one dispatch.** Effects are `#ifdef`-toggled in a single ubershader. VRAM is O(1) three textures total, regardless of how many effects you stack.
 - **Compute path by default**, fragment fallback. Compute skips the rasterizer for tighter scheduling and better extension composition; fragment kicks in automatically when the device doesnt support the storage-image features the compute path needs.
 - **Vulkan extension fast paths**: `VK_KHR_shader_float16_int8`, `VK_KHR_dynamic_rendering`, `VK_KHR_push_descriptor`, `VK_KHR_synchronization2`, Vulkan 1.1 subgroup ops, `VK_KHR_swapchain_mutable_format`. Each is queried at device creation; missing pieces log a single line and the layer keeps running.
-- **Async compute**: when the compute path is active, Bones automatically discovers and utilizes a dedicated async compute queue if the device exposes one not used by the game, allowing post-fx to run concurrently with the game next-frame rendering.
+- **Async compute**: when the compute path is active and rendering at native 1:1 resolution (`resolution_scale = 1.0`), Bones automatically discovers and utilizes a dedicated async compute queue if the device exposes one not used by the game, allowing post-fx to run concurrently with the game next-frame rendering.
 - **Resolution scale knob**: render the whole pipeline at any fraction of the swapchain (≥0.05) and upscale at the final blit. Big win on weak GPUs and heavy stacks.
 - **Skipped input copy**: the swap image is sampled directly via per-image views no spare full-frame copy per frame.
 - **Lazy postfx allocation**: when no effects are enabled, nothing is built. Toggle one on at runtime via hot reload and it spins up on the next present.
@@ -118,7 +118,7 @@ Each is opt-in via TOML (`optimize_*` keys) or env var (`BONES_OPTIMIZE_*`), def
 | `VK_KHR_shader_subgroup_extended_types` | subgroup ops on 8/16/64-bit and bool types | logs warning, runs without them |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | tighter driver optimization for subgroup ops | logs warning, runs without it |
 | `VK_KHR_swapchain_mutable_format` | sample sRGB swap images as UNORM (skip input copy) | logs warning, samples native format |
-| Dedicated async compute queue | concurrent post-fx dispatch alongside graphics | logs warning, falls back to present queue |
+| Dedicated async compute queue | concurrent post-fx dispatch alongside graphics (at 1.0 scale) | logs warning or disabled by scaling, falls back to present queue |
 
 The log line for a missing extension always looks like:
 
@@ -131,6 +131,8 @@ So you know exactly what the device is missing.
 ### Resolution scale
 
 A single multiplier (`resolution_scale`, default 1.0, minimum 0.05) controls the size of the entire postfx render target relative to the swapchain. Setting it to 0.5 renders all 125 effects at quarter resolution and bilinear-upscales to native at the final blit. On expensive effect stacks this routinely doubles framerate on weaker GPUs at a barely-perceptible cost in sharpness. The history texture follows the same scale, so temporal effects stay aligned.
+
+Because hardware blitting strictly requires a graphics-capable queue, setting `resolution_scale < 1.0` automatically routes submission to the presentation queue, bypassing async compute. If the physical device or surface format fundamentally lacks blitting capabilities (`BLIT_DST` / `BLIT_SRC`), the layer safely falls back to an unscaled 1:1 pixel copy.
 
 ### Skip input copy
 

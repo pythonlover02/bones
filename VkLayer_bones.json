@@ -3,12 +3,18 @@
     "layer": {
         "name": "VK_LAYER_BONES_overlay",
         "type": "GLOBAL",
-        "library_path": "./libbones.so",
+        "library_path": "libbones.so",
         "api_version": "1.0.0",
         "implementation_version": "4",
         "description": "Performance first Vulkan ubershader Post Processing layer for Linux.",
         "functions": {
             "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+        },
+        "enable_environment": {
+            "BONES_ENABLE": "1"
+        },
+        "disable_environment": {
+            "BONES_DISABLE": "1"
         }
     }
 }

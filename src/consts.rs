@@ -18,18 +18,7 @@ pub(crate) const ENV_COMPUTE: &str = "BONES_COMPUTE";
 pub(crate) const ENV_COMPUTE_X: &str = "BONES_COMPUTE_X";
 pub(crate) const ENV_COMPUTE_Y: &str = "BONES_COMPUTE_Y";
 
-pub(crate) const ENV_PRELOAD: &str = "LD_PRELOAD";
-pub(crate) const ENV_VK_ADD_LAYER_PATH: &str = "VK_ADD_LAYER_PATH";
-pub(crate) const ENV_VK_INSTANCE_LAYERS: &str = "VK_INSTANCE_LAYERS";
-
-pub(crate) const INSTALL_LIB_64: &str = "/usr/local/lib/bones/x86_64/libbones.so";
-pub(crate) const INSTALL_LIB_32: &str = "/usr/local/lib/bones/i686/libbones.so";
-pub(crate) const INSTALL_DIR_64: &str = "/usr/local/lib/bones/x86_64";
-pub(crate) const INSTALL_DIR_32: &str = "/usr/local/lib/bones/i686";
-pub(crate) const DEV_LIB_64: &str = "target/release/libbones.so";
-pub(crate) const DEV_LIB_32: &str = "target/i686-unknown-linux-gnu/release/libbones.so";
-pub(crate) const DEV_DIR_64: &str = "target/release";
-pub(crate) const DEV_DIR_32: &str = "target/i686-unknown-linux-gnu/release";
+pub(crate) const ENV_ENABLE: &str = "BONES_ENABLE";
 
 pub(crate) const FLATPAK_CMD: &str = "flatpak";
 pub(crate) const FLATPAK_RUN: &str = "run";
@@ -39,7 +28,6 @@ pub(crate) const FLATPAK_INFO: &str = "info";
 pub(crate) const FLATPAK_SHOW_META: &str = "--show-metadata";
 
 pub(crate) const CONFIG_SEP: char = ';';
-pub(crate) const ENV_SEP: char = ':';
 pub(crate) const POLL_BLOCK: i32 = -1;
 
 pub(crate) const HOT_RELOAD_KEY: &str = "hot_reload";

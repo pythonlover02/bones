@@ -156,14 +156,14 @@ Each Make target does one thing. Nothing builds implicitly except the build targ
 
 | Command | What it does |
 |---------|--------------|
-| `make` | Native cargo build → `target/release/{bones,libbones.so}` |
+| `make` | Native cargo build → `target/x86_64-unknown-linux-gnu/release/{bones,libbones.so}` |
 | `make 32` | 32-bit (i686) build → `target/i686-unknown-linux-gnu/release/libbones.so` |
 | `make release` | Same artifacts (64-bit + 32-bit), built in a Debian Bookworm container (glibc 2.36) |
-| `make integrated` | Stage `libbones.so` + manifest + licenses into `target/release/integrated/` (errors if not built) |
 | `make flatpak` | Build `.flatpak` bundles for runtimes 23.08 / 24.08 / 25.08 (errors if not built) |
-| `sudo make install` | Install whatever currently exists in `target/` and `flatpak/`. **Never builds.** No-op if nothing is there. |
-| `sudo make remove` | Remove the launcher, library, manifest, system + user flatpak extension, and `~/.config/bones` |
-| `make clean` | `cargo clean` + remove `integrated/`, `flatpak/`, container stamps |
+| `sudo make install` | Install native x64 and x32 binaries that exist in `target/`. **Never builds.** No-op if nothing is there. |
+| `sudo make flatpak-install` | Install built `.flatpak` extensions for the invoking user. |
+| `sudo make uninstall` | Remove the launcher, library, manifest, system + user flatpak extension, and `~/.config/bones` |
+| `make clean` | `cargo clean` + remove `flatpak/`, container stamps |
 | `make flatpak-clean` | Remove flatpak bundles and workdir only |
 
 ### Pre-built binaries (if available)
@@ -183,7 +183,8 @@ make                 # native 64-bit build
 make 32              # optional: 32-bit build for 32-bit games
 make release         # portable 64-bit + 32-bit build in container (needs podman/docker)
 make flatpak         # optional: build flatpak extensions
-sudo make install    # install everything that was built
+sudo make install    # install native x64 and x32 binaries
+sudo make flatpak-install # optional: install flatpak extensions
 ```
 
 The 32-bit build requires `rustup target add i686-unknown-linux-gnu`, `gcc-multilib`, `g++-multilib`, `cmake`, `python3`, and `git`. `make 32` checks for these and prints what is missing. `make release` runs both 64-bit and 32-bit container builds for portable glibc-2.36 artifacts.
@@ -192,48 +193,25 @@ The 32-bit build requires `rustup target add i686-unknown-linux-gnu`, `gcc-multi
 
 | File | Default path |
 |------|--------------|
-| Launcher | `/usr/local/bin/bones` |
-| Library (64-bit) | `/usr/local/lib/bones/x86_64/libbones.so` |
-| Library (32-bit) | `/usr/local/lib/bones/i686/libbones.so` |
-| Vulkan layer manifest (64-bit) | `/usr/local/lib/bones/x86_64/VkLayer_bones.json` |
-| Vulkan layer manifest (32-bit) | `/usr/local/lib/bones/i686/VkLayer_bones.json` |
+| Launcher | `/usr/bin/bones` |
+| Library (64-bit) | `/usr/lib/x86_64-linux-gnu/libbones.so` or `/usr/lib64/libbones.so` or `/usr/lib/libbones.so` |
+| Library (32-bit) | `/usr/lib/i386-linux-gnu/libbones.so` or `/usr/lib/libbones.so` or `/usr/lib32/libbones.so` |
+| Vulkan layer manifest | `/usr/share/vulkan/implicit_layer.d/VkLayer_bones.json` |
+| Docs & Licenses | `/usr/share/doc/bones/` |
 
-When both architectures are installed, the launcher prepends *both* `x86_64` and `i686` directories to `VK_ADD_LAYER_PATH` (and the corresponding libraries to `LD_PRELOAD`, joined with `:`) so 32-bit games discover the 32-bit layer and 64-bit games discover the 64-bit layer, automatically.
+Because the manifest is installed to the system-wide Vulkan directory and libraries are installed to standard distro-specific library paths, 32-bit games discover the 32-bit layer and 64-bit games discover the 64-bit layer automatically without custom `VK_ADD_LAYER_PATH` mapping required.
 
 ```sh
 sudo make install PREFIX=/opt/bones    # change prefix
 sudo make install DESTDIR=./package    # stage into a directory (packaging)
 ```
 
-If you built flatpak bundles with `make flatpak` beforehand, `sudo make install` also installs them per-user for the invoking user. If you didnt, it skips that step silently.
-
-### Integrated build (for Proton forks and custom launchers)
-
-```sh
-make           # build first (and optionally `make 32` for 32-bit too)
-make integrated
-```
-
-Stages everything into `target/release/integrated/`:
-
-```
-target/release/integrated/
-├── x86_64/
-│   ├── libbones.so
-│   └── VkLayer_bones.json
-├── i686/                       (only if `make 32` was run)
-│   ├── libbones.so
-│   └── VkLayer_bones.json
-├── LICENSE
-└── dist.LICENSE
-```
-
-Nothing is installed system-wide. Copy the contents wherever your launcher expects them, then set `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` to point at the destination. Use `:` between architectures if you need both.
+To install flatpak bundles built with `make flatpak`, run `sudo make flatpak-install`. This installs them per-user for the invoking user.
 
 ### Uninstalling
 
 ```sh
-sudo make remove
+sudo make uninstall
 ```
 
 Removes launcher, library (both architectures), manifest, system-scope flatpak extension, user-scope flatpak extension for the invoking user, and `~/.config/bones`. If run directly as root without `sudo` (no `SUDO_USER`), it skips the user-scope steps and prints the commands to run as your user.
@@ -241,7 +219,7 @@ Removes launcher, library (both architectures), manifest, system-scope flatpak e
 ### Cleaning build artifacts
 
 ```sh
-make clean          # cargo clean + remove integrated/, flatpak/, container stamps
+make clean          # cargo clean + remove flatpak/, container stamps
 make flatpak-clean  # remove only flatpak bundles + workdir
 ```
 
@@ -278,7 +256,7 @@ Install the bundle matching your `org.freedesktop.Platform` runtime. Run `flatpa
 flatpak install --user org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
 ```
 
-Multiple runtime versions can coexist. If you ran `sudo make install` with the extensions already built, theyre installed automatically for the invoking user.
+Multiple runtime versions can coexist. If you ran `sudo make flatpak-install` with the extensions already built, theyre installed automatically for the invoking user.
 
 ```sh
 flatpak uninstall --user org.freedesktop.Platform.VulkanLayer.bones
@@ -372,7 +350,7 @@ With `hot_reload = true` and no `BONES_*` env vars set, Bones uses `inotify` to 
 | `BONES_CONFIG_NAME` | Which profile to load (in file mode) | any profile name | `bones` |
 | `BONES_LOG` | Log verbosity (written to stderr) | `off`, `error`, `warn`, `info` | `warn` |
 
-Empty or unset means "use default". `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` are set automatically by the launcher; you only set them manually with the `integrated` build.
+Empty or unset means "use default". `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` are set automatically by the launcher when used manually.
 
 ## Effect Catalogue
 

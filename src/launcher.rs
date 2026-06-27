@@ -6,15 +6,8 @@ use std::process::Command;
 use crate::config::config_dir;
 use crate::config::config_path;
 use crate::config::sanitize_name;
-use crate::consts::DEV_DIR_32;
-use crate::consts::DEV_DIR_64;
-use crate::consts::DEV_LIB_32;
-use crate::consts::DEV_LIB_64;
 use crate::consts::ENV_CONFIG_NAME;
-use crate::consts::ENV_PRELOAD;
-use crate::consts::ENV_SEP;
-use crate::consts::ENV_VK_ADD_LAYER_PATH;
-use crate::consts::ENV_VK_INSTANCE_LAYERS;
+use crate::consts::ENV_ENABLE;
 use crate::consts::FLATPAK_CMD;
 use crate::consts::FLATPAK_INFO;
 use crate::consts::FLATPAK_INJECT;
@@ -22,19 +15,17 @@ use crate::consts::FLATPAK_META_KEY;
 use crate::consts::FLATPAK_RUN;
 use crate::consts::FLATPAK_SHOW_META;
 use crate::consts::HEAD;
-use crate::consts::INSTALL_DIR_32;
-use crate::consts::INSTALL_DIR_64;
-use crate::consts::INSTALL_LIB_32;
-use crate::consts::INSTALL_LIB_64;
-use crate::consts::LAYER_NAME;
 use crate::consts::USAGE;
 use crate::env::env_bypass_active;
-use crate::env::env_preload;
-use crate::env::env_vk_add_layer_path;
-use crate::env::env_vk_instance_layers;
 use crate::logging::init_log_level;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
+
+const ENABLE_VALUE: &str = "1";
+const DEFAULT_PROFILE: &str = "bones";
+const EXIT_EXEC_FAILED: i32 = 127;
+const EXIT_USAGE: i32 = 1;
+const EXIT_OK: i32 = 0;
 
 fn is_help_flag(a: &str) -> bool {
     a == "--help" || a == "-h"
@@ -50,52 +41,6 @@ fn split_args(args: &[String]) -> (Vec<String>, Vec<String>) {
         args[..pos].to_vec(),
         args.get(pos + 1..).unwrap_or(&[]).to_vec(),
     )
-}
-
-fn lib_pair(install: &str, dev: &str) -> [PathBuf; 2] {
-    [PathBuf::from(install), PathBuf::from(dev)]
-}
-
-fn first_existing(search: &[PathBuf]) -> Option<PathBuf> {
-    search.iter().find(|p| p.exists()).cloned()
-}
-
-fn canonical_string(p: PathBuf) -> String {
-    p.canonicalize()
-        .unwrap_or(p)
-        .to_string_lossy()
-        .into_owned()
-}
-
-fn resolve_one(install: &str, dev: &str) -> Option<String> {
-    first_existing(&lib_pair(install, dev)).map(canonical_string)
-}
-
-fn join_pair(a: Option<String>, b: Option<String>, sep: char) -> Option<String> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(format!("{}{}{}", x, sep, y)),
-        (Some(x), None) => Some(x),
-        (None, Some(y)) => Some(y),
-        (None, None) => None,
-    }
-}
-
-fn resolved_libs() -> String {
-    join_pair(
-        resolve_one(INSTALL_LIB_64, DEV_LIB_64),
-        resolve_one(INSTALL_LIB_32, DEV_LIB_32),
-        ENV_SEP,
-    )
-    .unwrap_or_else(|| INSTALL_LIB_64.into())
-}
-
-fn resolved_layer_dirs() -> String {
-    join_pair(
-        resolve_one(INSTALL_DIR_64, DEV_DIR_64),
-        resolve_one(INSTALL_DIR_32, DEV_DIR_32),
-        ENV_SEP,
-    )
-    .unwrap_or_else(|| INSTALL_DIR_64.into())
 }
 
 fn is_flatpak_bin(name: &str) -> bool {
@@ -172,6 +117,7 @@ fn build_flatpak_args(
         vec![
             FLATPAK_RUN.to_string(),
             format!("--command={}", FLATPAK_INJECT),
+            format!("--env={}={}", ENV_ENABLE, ENABLE_VALUE),
             format!("--env={}={}", ENV_CONFIG_NAME, profile),
         ],
         flags.to_vec(),
@@ -198,45 +144,21 @@ fn ensure_profile_config(profile: &str) {
     }
 }
 
-fn val_in_list(existing: &str, val: &str, sep: char) -> bool {
-    existing.split(sep).any(|s| s == val)
-}
-
-fn join_env(val: &str, prev: &str, sep: char) -> String {
-    match val_in_list(prev, val, sep) {
-        true => prev.to_string(),
-        false => format!("{}{}{}", val, sep, prev),
-    }
-}
-
-fn prepend_env(val: &str, existing: Option<String>, sep: char) -> String {
-    match existing.filter(|s| !s.is_empty()) {
-        Some(prev) => join_env(val, &prev, sep),
-        None => val.to_string(),
-    }
-}
-
-fn exec_child(full: &[String], profile: &str, preload: &str, layer_dir: &str) -> i32 {
-    let err = Command::new(&full[0])
-        .args(&full[1..])
+fn exec_native(cmd: &[String], profile: &str) -> i32 {
+    let err = Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .env(ENV_ENABLE, ENABLE_VALUE)
         .env(ENV_CONFIG_NAME, profile)
-        .env(ENV_PRELOAD, prepend_env(preload, env_preload(), ENV_SEP))
-        .env(ENV_VK_ADD_LAYER_PATH, prepend_env(layer_dir, env_vk_add_layer_path(), ENV_SEP))
-        .env(ENV_VK_INSTANCE_LAYERS, prepend_env(LAYER_NAME, env_vk_instance_layers(), ENV_SEP))
         .exec();
     log_at(LogLevel::Error, &format!("exec failed: {}", err));
-    127
-}
-
-fn exec_native(cmd: &[String], profile: &str) -> i32 {
-    exec_child(cmd, profile, &resolved_libs(), &resolved_layer_dirs())
+    EXIT_EXEC_FAILED
 }
 
 fn exec_flatpak(cmd: &[String], profile: &str) -> i32 {
     match flatpak_app_id(cmd) {
         None => {
             log_at(LogLevel::Error, "flatpak run: no app id found");
-            1
+            EXIT_USAGE
         }
         Some(app_id) => {
             let args = build_flatpak_args(
@@ -248,13 +170,13 @@ fn exec_flatpak(cmd: &[String], profile: &str) -> i32 {
             );
             let err = Command::new(FLATPAK_CMD).args(&args).exec();
             log_at(LogLevel::Error, &format!("exec failed: {}", err));
-            127
+            EXIT_EXEC_FAILED
         }
     }
 }
 
 fn launch_cmd(head: &[String], cmd: &[String]) -> i32 {
-    let profile = sanitize_name(head.first().map(String::as_str).unwrap_or("bones"));
+    let profile = sanitize_name(head.first().map(String::as_str).unwrap_or(DEFAULT_PROFILE));
     ensure_profile_config(&profile);
     match is_flatpak_run(cmd) {
         true => exec_flatpak(cmd, &profile),
@@ -267,7 +189,7 @@ fn launch(args: Vec<String>) -> i32 {
     match cmd.is_empty() {
         true => {
             print!("{}", USAGE);
-            1
+            EXIT_USAGE
         }
         false => launch_cmd(&head, &cmd),
     }
@@ -278,7 +200,7 @@ pub fn run_launcher(args: Vec<String>) -> i32 {
     match wants_help(&args) {
         true => {
             print!("{}", USAGE);
-            0
+            EXIT_OK
         }
         false => launch(args),
     }

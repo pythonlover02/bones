@@ -6,18 +6,15 @@ use crate::consts::ENV_COMPUTE_Y;
 use crate::consts::ENV_CONFIG;
 use crate::consts::ENV_CONFIG_NAME;
 use crate::consts::ENV_LOG;
+use crate::consts::ENV_OPT_ASYNC_COMPUTE;
 use crate::consts::ENV_OPT_DYNREN;
 use crate::consts::ENV_OPT_FP16;
 use crate::consts::ENV_OPT_PUSHDESC;
 use crate::consts::ENV_OPT_SUBGROUP;
-use crate::consts::ENV_OPT_ASYNC_COMPUTE;
 use crate::consts::ENV_OPT_SUBGROUP_EXT_TYPES;
 use crate::consts::ENV_OPT_SUBGROUP_UNIFORM_FLOW;
 use crate::consts::ENV_OPT_SYNC2;
-use crate::consts::ENV_PRELOAD;
 use crate::consts::ENV_RES_SCALE;
-use crate::consts::ENV_VK_ADD_LAYER_PATH;
-use crate::consts::ENV_VK_INSTANCE_LAYERS;
 use crate::consts::RES_SCALE_MIN;
 
 pub(crate) const ENV_BYPASS_KEYS: [&str; 13] = [
@@ -83,10 +80,6 @@ pub(crate) fn env_string(key: &str, default: &str) -> String {
     read_var(key).unwrap_or_else(|| default.into())
 }
 
-pub(crate) fn env_opt_string(key: &str) -> Option<String> {
-    read_var(key)
-}
-
 pub(crate) fn env_log_level() -> String {
     env_string(ENV_LOG, "warn")
 }
@@ -97,18 +90,6 @@ pub(crate) fn env_config_name() -> String {
 
 pub(crate) fn env_config_inline() -> Option<String> {
     read_var(ENV_CONFIG)
-}
-
-pub(crate) fn env_preload() -> Option<String> {
-    env_opt_string(ENV_PRELOAD)
-}
-
-pub(crate) fn env_vk_add_layer_path() -> Option<String> {
-    env_opt_string(ENV_VK_ADD_LAYER_PATH)
-}
-
-pub(crate) fn env_vk_instance_layers() -> Option<String> {
-    env_opt_string(ENV_VK_INSTANCE_LAYERS)
 }
 
 pub(crate) fn env_home() -> String {

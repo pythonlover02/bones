@@ -5,16 +5,28 @@ from pathlib import Path
 from typing import Final
 
 
+EXT_ID: Final[str] = "org.freedesktop.Platform.VulkanLayer.bones"
+PLATFORM_ID: Final[str] = "org.freedesktop.Platform"
+SDK_ID: Final[str] = "org.freedesktop.Sdk"
 ARCH: Final[str] = "x86_64"
-BRANCH_PREFIX: Final[str] = f"runtime/org.freedesktop.Platform.VulkanLayer.bones/{ARCH}/"
+BRANCH_TEMPLATE: Final[str] = "runtime/{ext}/{arch}/{rt}"
 SUBJECT_PREFIX: Final[str] = "bones extension "
 OSTREE_BIN: Final[str] = "ostree"
+
+METADATA_TEMPLATE: Final[str] = """\
+[Runtime]
+name={ext}
+runtime={platform}/{arch}/{rt}
+sdk={sdk}/{arch}/{rt}
+
+[ExtensionOf]
+ref=runtime/{platform}/{arch}/{rt}
+"""
 
 
 @dataclass(frozen=True)
 class CommitArgs:
     rt: str
-    meta_file: Path
     repo: Path
     stage: Path
 
@@ -24,25 +36,28 @@ class CommitPlan:
     branch: str
     subject: str
     metadata: str
+    stage_metadata_path: Path
     repo: Path
     stage: Path
 
 
 def parse_argv(argv: list[str]) -> CommitArgs:
-    _, rt, meta_file, repo, stage = argv
-    return CommitArgs(
-        rt=rt,
-        meta_file=Path(meta_file),
-        repo=Path(repo),
-        stage=Path(stage),
+    _, rt, repo, stage = argv
+    return CommitArgs(rt=rt, repo=Path(repo), stage=Path(stage))
+
+
+def render_metadata(rt: str) -> str:
+    return METADATA_TEMPLATE.format(
+        ext=EXT_ID, platform=PLATFORM_ID, sdk=SDK_ID, arch=ARCH, rt=rt
     )
 
 
-def build_plan(args: CommitArgs, metadata: str) -> CommitPlan:
+def build_plan(args: CommitArgs) -> CommitPlan:
     return CommitPlan(
-        branch=BRANCH_PREFIX + args.rt,
+        branch=BRANCH_TEMPLATE.format(ext=EXT_ID, arch=ARCH, rt=args.rt),
         subject=SUBJECT_PREFIX + args.rt,
-        metadata=metadata,
+        metadata=render_metadata(args.rt),
+        stage_metadata_path=args.stage / "metadata",
         repo=args.repo,
         stage=args.stage,
     )
@@ -60,8 +75,8 @@ def build_command(plan: CommitPlan) -> list[str]:
     ]
 
 
-def call_read_text(path: Path) -> str:
-    return path.read_text()
+def call_write_text(path: Path, content: str) -> None:
+    path.write_text(content)
 
 
 def call_run(cmd: list[str]) -> int:
@@ -69,8 +84,9 @@ def call_run(cmd: list[str]) -> int:
 
 
 def main() -> int:
-    args = parse_argv(sys.argv)
-    return call_run(build_command(build_plan(args, call_read_text(args.meta_file))))
+    plan = build_plan(parse_argv(sys.argv))
+    call_write_text(plan.stage_metadata_path, plan.metadata)
+    return call_run(build_command(plan))
 
 
 sys.exit(main())

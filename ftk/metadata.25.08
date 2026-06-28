@@ -1,7 +1,0 @@
-[Runtime]
-name=org.freedesktop.Platform.VulkanLayer.bones
-runtime=org.freedesktop.Platform/x86_64/25.08
-sdk=org.freedesktop.Sdk/x86_64/25.08
-
-[ExtensionOf]
-ref=runtime/org.freedesktop.Platform/x86_64/25.08

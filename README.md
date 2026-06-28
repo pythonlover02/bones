@@ -5,7 +5,7 @@
 
 **Performance first Vulkan ubershader Post Processing layer for Linux.**
 
-Bones is a realtime post-processing layer for Vulkan games on Linux, written in Rust. It registers as an explicit Vulkan layer (`VK_LAYER_BONES_overlay`), intercepts `vkQueuePresentKHR`, runs a single ubershader containing 125 effects, and presents the modified frame. It is built around an explicit performance stance: one shader, one pass, no ping-pong, with optional GPU-extension fast paths layered on top.
+Bones is a realtime post-processing layer for Vulkan games on Linux, written in Rust. It registers as an implicit Vulkan layer (`VK_LAYER_BONES_overlay`), gated by `BONES_ENABLE=1` (set automatically by the launcher for the target process), intercepts `vkQueuePresentKHR`, runs a single ubershader containing 125 effects, and presents the modified frame. It is built around an explicit performance stance: one shader, one pass, no ping-pong, with optional GPU-extension fast paths layered on top.
 
 ### At a glance
 
@@ -55,6 +55,7 @@ bones -- %command%
 - [How It Works](#how-it-works)
 - [Performance Architecture](#performance-architecture)
 - [Installation](#installation)
+- [FEX-Emu / Box64](#fex-emu--box64)
 - [Flatpak](#flatpak)
 - [Usage](#usage)
 - [Environment Variables](#environment-variables)
@@ -74,9 +75,15 @@ Bones is Vulkan-only. OpenGL, OpenGL ES, and other graphics APIs are out of scop
 
 The compute path additionally requires the device feature `shaderStorageImageWriteWithoutFormat` and a swap format that supports `VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT`. Missing either of these silently downgrades the swapchain to the fragment-shader path.
 
+Native aarch64 builds are not provided. See [FEX-Emu / Box64](#fex-emu--box64) if you're running aarch64.
+
 ## How It Works
 
-Bones registers as an explicit Vulkan layer (`VK_LAYER_BONES_overlay`), enabled via `VK_INSTANCE_LAYERS` (set automatically by the launcher). At `vkQueuePresentKHR`, the layer:
+Bones registers as an implicit Vulkan layer (`VK_LAYER_BONES_overlay`) via the manifest at `/usr/share/vulkan/implicit_layer.d/VkLayer_bones.json`. The manifest declares `enable_environment = BONES_ENABLE`, so the Vulkan loader always discovers the layer but only activates it when `BONES_ENABLE=1` is set in the target process's environment.
+
+The `bones` launcher sets `BONES_ENABLE=1` on the child process before exec, on both the native path (a plain `Command::exec` with `BONES_ENABLE` and `BONES_CONFIG_NAME` injected into the child env) and the Flatpak path (where the launcher rewrites `flatpak run` to add `--env=BONES_ENABLE=1` and `--env=BONES_CONFIG_NAME=<profile>` so the variables cross the sandbox boundary). On the Flatpak path, the launcher also redirects execution through a small wrapper (`bones-flatpak`) shipped inside the Flatpak runtime extension, which sets the in-sandbox `VK_ADD_LAYER_PATH` and `LD_LIBRARY_PATH` the launcher can't know about from outside the sandbox.
+
+At `vkQueuePresentKHR`, the layer:
 
 1. Samples the swap image directly through a per-image `ImageView` (no input copy).
 2. Runs the **ubershader** (compute by default, fragment when unsupported) into an offscreen `tex_output` at `fx_extent = swap_extent × resolution_scale`.
@@ -158,11 +165,11 @@ Each Make target does one thing. Nothing builds implicitly except the build targ
 |---------|--------------|
 | `make` | Native cargo build → `target/x86_64-unknown-linux-gnu/release/{bones,libbones.so}` |
 | `make 32` | 32-bit (i686) build → `target/i686-unknown-linux-gnu/release/libbones.so` |
-| `make release` | Same artifacts (64-bit + 32-bit), built in a Debian Bookworm container (glibc 2.36) |
-| `make flatpak` | Build `.flatpak` bundles for runtimes 23.08 / 24.08 / 25.08 (errors if not built) |
+| `make release` | Same artifacts (64-bit + 32-bit), built in a pinned Debian Bookworm container (glibc 2.36) |
+| `make flatpak` | Build `.flatpak` bundles for runtimes 23.08 / 24.08 / 25.08. Requires both `make` and `make 32` to have been run first. |
 | `sudo make install` | Install native x64 and x32 binaries that exist in `target/`. **Never builds.** No-op if nothing is there. |
-| `sudo make flatpak-install` | Install built `.flatpak` extensions for the invoking user. |
-| `sudo make uninstall` | Remove the launcher, library, manifest, system + user flatpak extension, and `~/.config/bones` |
+| `sudo make flatpak-install` | Install built `.flatpak` extensions for the invoking user. Does not support `DESTDIR`. |
+| `sudo make uninstall` | Remove the launcher, library, manifest, user flatpak extension, and `~/.config/bones` |
 | `make clean` | `cargo clean` + remove `flatpak/`, container stamps |
 | `make flatpak-clean` | Remove flatpak bundles and workdir only |
 
@@ -179,15 +186,15 @@ sudo make install
 ```sh
 git clone https://github.com/pythonlover02/bones.git
 cd bones
-make                 # native 64-bit build
-make 32              # optional: 32-bit build for 32-bit games
-make release         # portable 64-bit + 32-bit build in container (needs podman/docker)
-make flatpak         # optional: build flatpak extensions
-sudo make install    # install native x64 and x32 binaries
+make                      # native 64-bit build
+make 32                   # optional: 32-bit build for 32-bit games (required for `make flatpak`)
+make release              # portable 64-bit + 32-bit build in container (needs podman/docker)
+make flatpak              # optional: build flatpak extensions (requires make + make 32 first)
+sudo make install         # install native x64 and x32 binaries
 sudo make flatpak-install # optional: install flatpak extensions
 ```
 
-The 32-bit build requires `rustup target add i686-unknown-linux-gnu`, `gcc-multilib`, `g++-multilib`, `cmake`, `python3`, and `git`. `make 32` checks for these and prints what is missing. `make release` runs both 64-bit and 32-bit container builds for portable glibc-2.36 artifacts.
+The 32-bit build requires `rustup target add i686-unknown-linux-gnu`, `gcc-multilib`, `g++-multilib`, `cmake`, `python3`, and `git`. `make 32` checks for these and prints what is missing. `make release` runs both 64-bit and 32-bit container builds for portable glibc-2.36 artifacts against a pinned `rust:1.82-bookworm` image, so the release stays reproducible across rebuilds.
 
 ### Install paths
 
@@ -199,14 +206,16 @@ The 32-bit build requires `rustup target add i686-unknown-linux-gnu`, `gcc-multi
 | Vulkan layer manifest | `/usr/share/vulkan/implicit_layer.d/VkLayer_bones.json` |
 | Docs & Licenses | `/usr/share/doc/bones/` |
 
-Because the manifest is installed to the system-wide Vulkan directory and libraries are installed to standard distro-specific library paths, 32-bit games discover the 32-bit layer and 64-bit games discover the 64-bit layer automatically without custom `VK_ADD_LAYER_PATH` mapping required.
+Because the manifest is installed to the system-wide Vulkan implicit-layer directory and libraries are installed to standard distro-specific library paths, 32-bit games discover the 32-bit layer and 64-bit games discover the 64-bit layer automatically. The Vulkan loader picks up the manifest with no custom `VK_ADD_LAYER_PATH` mapping required, and the launcher gates activation per-process via `BONES_ENABLE=1`.
 
 ```sh
-sudo make install PREFIX=/opt/bones    # change prefix
 sudo make install DESTDIR=./package    # stage into a directory (packaging)
 ```
 
-To install flatpak bundles built with `make flatpak`, run `sudo make flatpak-install`. This installs them per-user for the invoking user.
+> [!WARNING]
+> Avoid changing `PREFIX` away from `/usr` or `/usr/local`. The Vulkan loader only scans a fixed set of manifest directories (`/usr/share/vulkan/implicit_layer.d`, `/usr/local/share/vulkan/implicit_layer.d`, `$XDG_DATA_DIRS/vulkan/implicit_layer.d`, and `$VK_LAYER_PATH`). Installing to e.g. `/opt/bones` puts the manifest where nothing reads it, the library where `ldconfig` doesn't see it, and the launcher off `$PATH` the layer will not load even with `BONES_ENABLE=1` set. If you do need a custom prefix, you must also wire up `VK_LAYER_PATH`, `LD_LIBRARY_PATH`, and `PATH` in every shell that runs a Vulkan game.
+
+To install flatpak bundles built with `make flatpak`, run `sudo make flatpak-install`. This installs them per-user for the invoking user. `flatpak-install` does **not** support `DESTDIR`; Flatpak runtime extensions are installed via the `flatpak` CLI, not staged into a filesystem tree. Distro packagers should ship the `.flatpak` files from `flatpak/` directly.
 
 ### Uninstalling
 
@@ -214,7 +223,7 @@ To install flatpak bundles built with `make flatpak`, run `sudo make flatpak-ins
 sudo make uninstall
 ```
 
-Removes launcher, library (both architectures), manifest, system-scope flatpak extension, user-scope flatpak extension for the invoking user, and `~/.config/bones`. If run directly as root without `sudo` (no `SUDO_USER`), it skips the user-scope steps and prints the commands to run as your user.
+Removes launcher, library (both architectures), manifest, user-scope flatpak extension for the invoking user, and `~/.config/bones`. If run directly as root without `sudo` (no `SUDO_USER`), it skips the user-scope steps and prints the commands to run as your user.
 
 ### Cleaning build artifacts
 
@@ -223,18 +232,76 @@ make clean          # cargo clean + remove flatpak/, container stamps
 make flatpak-clean  # remove only flatpak bundles + workdir
 ```
 
+## FEX-Emu / Box64
+
+On an aarch64 Linux host, x86_64 Vulkan games are normally run through FEX-Emu or Box64. Bones doesn't ship a native aarch64 build because every shipping Vulkan game on Linux has an x86_64 build, so the translated x86_64 path is what people actually use.
+
+Translation layers typically run the game inside their own root directory a tree containing x86_64 binaries and libraries separate from the aarch64 host's `/usr/`. The Bones layer has to be installed into that tree, not the host's.
+
+### Recommended: Flatpak (if your host transparently runs x86_64 binaries)
+
+If your aarch64 host is configured to transparently execute x86_64 binaries typically by registering FEX-Emu or Box64 with the kernel's `binfmt_misc` so x86_64 ELFs are routed through the translation layer automatically install the Bones x86_64 Flatpak extension into the x86_64 Flatpak runtime. Once the kernel can run x86_64 binaries, an x86_64 Flatpak runtime works like any other Flatpak runtime, and the extension is picked up by games running inside it.
+
+Flatpak itself does **not** translate between architectures. An x86_64 Flatpak runtime contains x86_64 binaries that need an x86_64 CPU to execute; on aarch64, that requires the kernel-level translation setup above. Set that up first, consulting your translation layer's documentation, then:
+
+```sh
+make
+make 32             # required for the flatpak bundle
+make flatpak
+sudo make flatpak-install
+```
+
+The x86_64 Flatpak runtime must be installed on the host:
+
+```sh
+flatpak install org.freedesktop.Platform//24.08 --arch=x86_64
+```
+
+See [Flatpak](#flatpak) for full details.
+
+### Non-Flatpak: install into the translation layer's root
+
+Build the x86_64 layer (and optionally the i686 layer) on the host, then point `DESTDIR` at the directory the translation layer uses as its root:
+
+```sh
+make                                                  # build x86_64
+make 32                                               # optional, for 32-bit games
+sudo make DESTDIR=/path/to/translation-root install
+```
+
+The exact path depends on how your translation layer is configured consult its documentation. The destination must be a directory tree where the translated process sees `/usr/` as the host's standard layout.
+
+After installing, the layer manifest lives at `<root>/usr/share/vulkan/implicit_layer.d/VkLayer_bones.json` and the libraries at `<root>/usr/lib/x86_64-linux-gnu/libbones.so` (and `.../i386-linux-gnu/libbones.so` if you ran `make 32`). The x86_64 Vulkan loader inside the translated process discovers them via the standard paths no manual env-var routing needed.
+
+To uninstall the layer from the translation layer's root:
+
+```sh
+sudo make DESTDIR=/path/to/translation-root uninstall
+```
+
+To uninstall the Flatpak extension and the host-side per-user config (`~/.config/bones`):
+
+```sh
+sudo make uninstall
+```
+
+These are independent running one doesn't affect the other. If you installed both (extension *and* layer-into-rootfs), run both to fully clean up.
+
 ## Flatpak
 
-Flatpak applications run sandboxed and cannot see `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, or `VK_INSTANCE_LAYERS` set on the host those variables do not cross the sandbox boundary. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox. The wrapper sets the activation environment **from inside** the sandbox, the only place it survives.
+Flatpak applications run sandboxed and cannot see `VK_ADD_LAYER_PATH` or `BONES_ENABLE` set on the host those variables do not cross the sandbox boundary by default. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox.
+
+When you run `bones -- flatpak run …`, the launcher rewrites the command to inject `--env=BONES_ENABLE=1` and `--env=BONES_CONFIG_NAME=<profile>` into the `flatpak run` invocation, and redirects execution through `bones-flatpak` inside the sandbox via `--command=bones-flatpak`. The wrapper then sets `VK_ADD_LAYER_PATH` and `LD_LIBRARY_PATH` to point at the in-sandbox extension and execs the original entry point.
 
 Extensions are built for runtime versions `23.08`, `24.08`, and `25.08`.
 
 ### Building the extensions
 
-Requires `flatpak`, `ostree`, `python3`, and a completed `make` (or `make release`) build. `make flatpak` errors out at parse time if `target/release/libbones.so` doesnt exist.
+Requires `flatpak`, `ostree`, `python3`, both a 64-bit and a 32-bit build, and a completed `make` (or `make release`) build.
 
 ```sh
-make            # or: make release
+make            # 64-bit
+make 32         # 32-bit, required by the flatpak bundle
 make flatpak
 ```
 
@@ -246,7 +313,7 @@ org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
 org.freedesktop.Platform.VulkanLayer.bones-25.08.flatpak
 ```
 
-If you also ran `make 32` before `make flatpak`, the bundles include the 32-bit library too, so Flatpak games that run 32-bit Vulkan binaries (uncommon but real for some Wine setups inside Flatpak) get the layer.
+The bundle always includes the 32-bit library, so Flatpak games that run 32-bit Vulkan binaries (uncommon but real for some Wine setups inside Flatpak) get the layer.
 
 ### Installing the extensions
 
@@ -270,7 +337,7 @@ bones -- flatpak run --branch=stable com.example.Game   # flags pass through
 bones myprofile -- flatpak run com.example.Game          # named profile
 ```
 
-Bones detects the `flatpak run` invocation, reads the application metadata to find its entry point, and rewrites the command to run `bones-flatpak` inside the sandbox, which sets the environment and execs the app.
+The launcher detects the `flatpak run` invocation, reads the application metadata via `flatpak info --show-metadata` to find its entry point, and rewrites the command to run `bones-flatpak` inside the sandbox with `BONES_ENABLE=1` and `BONES_CONFIG_NAME=<profile>` injected as sandbox env vars. The wrapper sets the in-sandbox library / layer paths and execs the entry point.
 
 ### Steam launch option (Flatpak)
 
@@ -290,19 +357,33 @@ This requires the Bones Flatpak extension matching the game runtime to be instal
 
 ## Usage
 
+The launcher syntax is:
+
+```
+bones [profile] -- <command> [args...]
+bones -- <command> [args...]              # uses the default profile "bones"
+bones --help                              # or -h
+```
+
+Pass `--` to separate launcher options from the command. Anything before `--` is treated as an optional profile name; anything after is the command to launch.
+
 ### Profiles
 
-A profile is a named config at `~/.config/bones/<name>-config.toml`. The default profile is `bones` (`bones-config.toml`). Pass a name to load a different one:
+A profile is a named config at `~/.config/bones/<name>-config.toml`. The default profile when no name is given is `bones` (`bones-config.toml`). Profile names are sanitized characters outside `[A-Za-z0-9_-]` are stripped. Pass a name to load a different one:
 
 ```sh
 bones retro -- ~/games/retro-game   # loads ~/.config/bones/retro-config.toml
 ```
 
+The profile name also crosses into Flatpak sandboxes via `BONES_CONFIG_NAME`, so `bones retro -- flatpak run com.example.Game` loads the `retro` profile inside the sandbox.
+
 ### Configuration file
 
-The default config is generated at `~/.config/bones/bones-config.toml` on first run, with every effect listed and documented. Set any effect to `true` under its category section (e.g. `mirror_horizontal = true` under `[geometric]`), and `hot_reload = true` under `[general]` for live reloading. Effects are **toggle-only**, all parameters are baked into the shader.
+The default config is generated at `~/.config/bones/bones-config.toml` (or `<profile>-config.toml` if a profile is named) on first run, with every effect listed and documented. Set any effect to `true` under its category section (e.g. `mirror_horizontal = true` under `[geometric]`), and `hot_reload = true` under `[general]` for live reloading. Effects are **toggle-only**, all parameters are baked into the shader.
 
 The `[general]` section also controls the architectural settings: `resolution_scale`, `optimize_fp16`, `optimize_dynamic_rendering`, `optimize_push_descriptors`, `optimize_subgroup_ops`, `compute`, `compute_x`, `compute_y`. Every one of these has documentation in the generated config and a corresponding environment variable (see [Environment Variables](#environment-variables)).
+
+In env-mode (see below), no config file is read or written at all the launcher detects env-mode and skips the on-first-run file creation entirely.
 
 ### Env-mode (full file bypass)
 
@@ -347,10 +428,10 @@ With `hot_reload = true` and no `BONES_*` env vars set, Bones uses `inotify` to 
 
 | Variable | Purpose | Values | Default |
 |----------|---------|--------|---------|
-| `BONES_CONFIG_NAME` | Which profile to load (in file mode) | any profile name | `bones` |
+| `BONES_CONFIG_NAME` | Which profile to load. Set automatically by the launcher from the profile argument; can also be set manually. | any profile name (sanitized) | `bones` |
 | `BONES_LOG` | Log verbosity (written to stderr) | `off`, `error`, `warn`, `info` | `warn` |
 
-Empty or unset means "use default". `LD_PRELOAD`, `VK_ADD_LAYER_PATH`, and `VK_INSTANCE_LAYERS` are set automatically by the launcher when used manually.
+`BONES_ENABLE=1` is set automatically by the launcher on the child process (native) or injected into the Flatpak sandbox (via `--env=`) to activate the implicit layer. It is not something users set manually. On the Flatpak path, the in-sandbox wrapper additionally sets `VK_ADD_LAYER_PATH` and `LD_LIBRARY_PATH` so the loader can find the manifest and library inside the runtime extension.
 
 ## Effect Catalogue
 

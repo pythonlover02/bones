@@ -69,6 +69,8 @@ $(TARGET_32): $(RUST_SOURCES)
 	@command -v $(CMAKE) >/dev/null 2>&1 || { echo "error: $(CMAKE) required"; exit 1; }
 	@command -v $(PYTHON3) >/dev/null 2>&1 || { echo "error: $(PYTHON3) required"; exit 1; }
 	@command -v $(GIT) >/dev/null 2>&1 || { echo "error: $(GIT) required"; exit 1; }
+	# shaderc-from-source: i686 build fails without explicit <cstdint>
+	# CMAKE_POLICY_VERSION_MINIMUM: allow CMake 4.x to build deps that declare cmake_minimum_required(3.x<3.5)
 	CFLAGS="-m32" CXXFLAGS="-m32 -include cstdint" \
 	CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
 	CMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -78,7 +80,7 @@ $(TARGET_32): $(RUST_SOURCES)
 
 
 CONTAINER          ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo podman)
-CONTAINER_IMAGE    := rust:bookworm
+CONTAINER_IMAGE    := rust:1.82-bookworm
 CONTAINER_STAMP_64 := target/.container-stamp-64
 CONTAINER_STAMP_32 := target/.container-stamp-32
 
@@ -119,12 +121,17 @@ FLATPAK_ARCH     := x86_64
 FLATPAK_BUNDLES := $(foreach rt,$(FLATPAK_RUNTIMES),\
   $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-$(rt).flatpak)
 
+ifeq ($(and $(wildcard $(TARGET_64)),$(wildcard $(TARGET_32))),)
+flatpak:
+	@echo "nothing to package build first with 'make' and 'make 32' (or 'make release')"
+	@exit 1
+else
 flatpak: $(FLATPAK_BUNDLES)
+endif
 
 $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-%.flatpak: \
     $(TARGET_64) $(TARGET_32) $(MANIFEST) $(LICENSE) $(DIST_LICENSE) \
     $(FLATPAK_SRCDIR)/bones-flatpak \
-    $(FLATPAK_SRCDIR)/metadata.% \
     $(FLATPAK_SRCDIR)/commit.py
 	@command -v $(FLATPAK) >/dev/null 2>&1 || { echo "error: $(FLATPAK) required"; exit 1; }
 	@command -v $(OSTREE)  >/dev/null 2>&1 || { echo "error: $(OSTREE) required";  exit 1; }
@@ -147,9 +154,7 @@ $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-%.flatpak: \
 	cp $(DIST_LICENSE) $$work/stage/files/share/doc/bones/$(DIST_LICENSE); \
 	cp $(FLATPAK_SRCDIR)/bones-flatpak $$work/stage/files/bin/bones-flatpak; \
 	chmod +x $$work/stage/files/bin/bones-flatpak; \
-	cp $(FLATPAK_SRCDIR)/metadata.$$rt $$work/metadata; \
-	cp $(FLATPAK_SRCDIR)/metadata.$$rt $$work/stage/metadata; \
-	$(PYTHON3) $(FLATPAK_SRCDIR)/commit.py "$$rt" "$$work/metadata" "$$work/repo" "$$work/stage"; \
+	$(PYTHON3) $(FLATPAK_SRCDIR)/commit.py "$$rt" "$$work/repo" "$$work/stage"; \
 	$(FLATPAK) build-bundle --arch=$(FLATPAK_ARCH) $$work/repo $@ \
 	  $(FLATPAK_EXT_ID) "$$rt" --runtime; \
 	rm -rf $$work
@@ -173,7 +178,7 @@ endif
 
 BUILT_FLATPAKS := $(wildcard $(FLATPAK_OUTDIR)/$(FLATPAK_EXT_ID)-*.flatpak)
 INSTALLED_FLATPAK_STAMPS := \
-  $(BUILT_FLATPAKS:$(FLATPAK_OUTDIR)/%.flatpak=$(DESTDIR)$(STATE_DIR)/.installed-%)
+  $(BUILT_FLATPAKS:$(FLATPAK_OUTDIR)/%.flatpak=$(STATE_DIR)/.installed-%)
 
 EXISTING_INSTALL := $(strip \
   $(wildcard $(DESTDIR)$(bindir)/bones) \
@@ -189,13 +194,13 @@ endif
 
 ifneq (,$(EXISTING_INSTALL))
 install: check-root
-	@echo "error: bones or a program with the same name its installed:"
+	@echo "error: bones or a program with the same name is installed:"
 	@for f in $(EXISTING_INSTALL); do echo "  $$f"; done
-	@echo "if its a prior version of bones, run 'make uninstall' first or use FORCE_INSTALL=1"
+	@echo "if it's a prior version of bones, run 'make uninstall' first or use FORCE_INSTALL=1"
 	@exit 1
 else ifeq (,$(strip $(INSTALL_FILES)))
 install: check-root
-	@echo "nothing to install — build first with 'make', 'make 32', or 'make release'"
+	@echo "nothing to install build first with 'make', 'make 32', or 'make release'"
 	@exit 1
 else
 install: check-root $(INSTALL_FILES)
@@ -207,9 +212,16 @@ install: check-root $(INSTALL_FILES)
 	@echo "  manifest:  $(VK_LAYER_DIR)"
 endif
 
-ifeq (,$(strip $(INSTALLED_FLATPAK_STAMPS)))
+ifneq ($(DESTDIR),)
 flatpak-install: check-root
-	@echo "nothing to install — build first with 'make flatpak'"
+	@echo "error: flatpak-install does not support DESTDIR"
+	@echo "  flatpak runtime extensions are installed per-user via the flatpak CLI,"
+	@echo "  not staged into a filesystem tree. package the .flatpak files from"
+	@echo "  $(FLATPAK_OUTDIR)/ directly if you're building a distro package."
+	@exit 1
+else ifeq (,$(strip $(INSTALLED_FLATPAK_STAMPS)))
+flatpak-install: check-root
+	@echo "nothing to install build first with 'make flatpak'"
 	@exit 1
 else
 flatpak-install: check-root $(INSTALLED_FLATPAK_STAMPS)
@@ -223,11 +235,9 @@ $(DESTDIR)$(VK_LAYER_DIR)/$(MANIFEST): $(MANIFEST)     ; install -Dm644 $< $@
 $(DESTDIR)$(DOC_DIR)/$(LICENSE):       $(LICENSE)      ; install -Dm644 $< $@
 $(DESTDIR)$(DOC_DIR)/$(DIST_LICENSE):  $(DIST_LICENSE) ; install -Dm644 $< $@
 
-$(DESTDIR)$(STATE_DIR)/.installed-%: $(FLATPAK_OUTDIR)/%.flatpak | check-sudo-user
+$(STATE_DIR)/.installed-%: $(FLATPAK_OUTDIR)/%.flatpak | check-sudo-user
 	@mkdir -p $(@D)
-	@if [ -z "$(DESTDIR)" ]; then \
-	  su - "$$SUDO_USER" -c "$(FLATPAK) install --user -y --reinstall '$(abspath $<)'"; \
-	fi
+	@su - "$$SUDO_USER" -c "$(FLATPAK) install --user -y --reinstall '$(abspath $<)'"
 	@touch $@
 
 uninstall: check-root
@@ -236,26 +246,27 @@ uninstall: check-root
 	rm -f  $(DESTDIR)$(LIBDIR_32)/libbones.so
 	rm -f  $(DESTDIR)$(VK_LAYER_DIR)/$(MANIFEST)
 	rm -rf $(DESTDIR)$(DOC_DIR)
-	rm -rf $(DESTDIR)$(STATE_DIR)
-	@test -n "$(DESTDIR)" || ldconfig 2>/dev/null || true
-	@flatpak uninstall --system -y $(FLATPAK_EXT_ID) 2>/dev/null || true
-	@if [ -n "$$SUDO_USER" ]; then \
-	  su - "$$SUDO_USER" -c \
-	    "flatpak uninstall --user -y $(FLATPAK_EXT_ID) 2>/dev/null" || true; \
-	  su - "$$SUDO_USER" -c "rm -rf \"\$$HOME/.config/bones\"" || true; \
-	else \
-	  echo "note: SUDO_USER not set — run as your user: flatpak uninstall --user $(FLATPAK_EXT_ID)"; \
+	@if [ -z "$(DESTDIR)" ]; then \
+	  rm -rf $(STATE_DIR); \
+	  ldconfig 2>/dev/null || true; \
+	  if [ -n "$$SUDO_USER" ]; then \
+	    su - "$$SUDO_USER" -c \
+	      "flatpak uninstall --user -y $(FLATPAK_EXT_ID) 2>/dev/null" || true; \
+	    su - "$$SUDO_USER" -c "rm -rf \"\$$HOME/.config/bones\"" || true; \
+	  else \
+	    echo "note: SUDO_USER not set run as your user: flatpak uninstall --user $(FLATPAK_EXT_ID)"; \
+	  fi; \
 	fi
 
 check-root:
 	@if [ "$$(id -u)" -ne 0 ]; then \
-	  echo "error: needs root — run: sudo make $(MAKECMDGOALS)"; \
+	  echo "error: needs root run: sudo make $(MAKECMDGOALS)"; \
 	  exit 1; \
 	fi
 
 check-sudo-user:
-	@if [ -z "$(DESTDIR)" ] && [ -z "$$SUDO_USER" ]; then \
-	  echo "error: SUDO_USER not set — run via 'sudo make ...' from your user shell"; \
+	@if [ -z "$$SUDO_USER" ]; then \
+	  echo "error: SUDO_USER not set run via 'sudo make ...' from your user shell"; \
 	  exit 1; \
 	fi
 

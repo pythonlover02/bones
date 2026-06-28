@@ -6,6 +6,11 @@ use std::process::Command;
 use crate::config::config_dir;
 use crate::config::config_path;
 use crate::config::sanitize_name;
+use crate::consts::ENABLE_VALUE;
+use crate::consts::DEFAULT_PROFILE;
+use crate::consts::EXIT_EXEC_FAILED;
+use crate::consts::EXIT_USAGE;
+use crate::consts::EXIT_OK;
 use crate::consts::ENV_CONFIG_NAME;
 use crate::consts::ENV_ENABLE;
 use crate::consts::FLATPAK_CMD;
@@ -20,12 +25,6 @@ use crate::env::env_bypass_active;
 use crate::logging::init_log_level;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
-
-const ENABLE_VALUE: &str = "1";
-const DEFAULT_PROFILE: &str = "bones";
-const EXIT_EXEC_FAILED: i32 = 127;
-const EXIT_USAGE: i32 = 1;
-const EXIT_OK: i32 = 0;
 
 fn is_help_flag(a: &str) -> bool {
     a == "--help" || a == "-h"

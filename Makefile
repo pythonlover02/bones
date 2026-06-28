@@ -46,6 +46,10 @@ FORCE_INSTALL ?= 0
 RUST_SOURCES := $(wildcard Cargo.toml Cargo.lock) \
   $(shell find . -path ./target -prune -o -name '*.rs' -print 2>/dev/null)
 
+ifneq ($(filter flatpak install flatpak-install,$(MAKECMDGOALS)),)
+RUST_SOURCES :=
+endif
+
 ifeq ($(filter grouped-target,$(.FEATURES)),)
 $(error GNU make 4.3+ required)
 endif
@@ -69,8 +73,6 @@ $(TARGET_32): $(RUST_SOURCES)
 	@command -v $(CMAKE) >/dev/null 2>&1 || { echo "error: $(CMAKE) required"; exit 1; }
 	@command -v $(PYTHON3) >/dev/null 2>&1 || { echo "error: $(PYTHON3) required"; exit 1; }
 	@command -v $(GIT) >/dev/null 2>&1 || { echo "error: $(GIT) required"; exit 1; }
-	# shaderc-from-source: i686 build fails without explicit <cstdint>
-	# CMAKE_POLICY_VERSION_MINIMUM: allow CMake 4.x to build deps that declare cmake_minimum_required(3.x<3.5)
 	CFLAGS="-m32" CXXFLAGS="-m32 -include cstdint" \
 	CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
 	CMAKE_POLICY_VERSION_MINIMUM=3.5 \

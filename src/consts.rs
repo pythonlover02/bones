@@ -1,6 +1,12 @@
 pub(crate) const LAYER_NAME: &str = "VK_LAYER_BONES_overlay";
 pub(crate) const LAYER_DESC: &str = "Performance first Vulkan ubershader Post Processing layer for Linux.";
 
+pub(crate) const ENABLE_VALUE: &str = "1";
+pub(crate) const DEFAULT_PROFILE: &str = "bones";
+pub(crate) const EXIT_EXEC_FAILED: i32 = 127;
+pub(crate) const EXIT_USAGE: i32 = 1;
+pub(crate) const EXIT_OK: i32 = 0;
+
 pub(crate) const ENV_CONFIG_NAME: &str = "BONES_CONFIG_NAME";
 pub(crate) const ENV_CONFIG: &str = "BONES_CONFIG";
 pub(crate) const ENV_LOG: &str = "BONES_LOG";

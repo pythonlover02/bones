@@ -435,7 +435,7 @@ With `hot_reload = true` and no `BONES_*` env vars set, Bones uses `inotify` to 
 
 ## Effect Catalogue
 
-125 effects in 21 categories, applied in the fixed order below. The selection column is the rule of thumb; see the note after the table.
+125 effects in 20 categories, applied in the fixed order below. The selection column is the rule of thumb; see the note after the table.
 
 | Order | Category | Section | Count | What it does | Selection |
 |------:|----------|---------|------:|--------------|-----------|

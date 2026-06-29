@@ -29,9 +29,6 @@ pub(crate) const ENV_ENABLE: &str = "BONES_ENABLE";
 pub(crate) const FLATPAK_CMD: &str = "flatpak";
 pub(crate) const FLATPAK_RUN: &str = "run";
 pub(crate) const FLATPAK_INJECT: &str = "/usr/lib/extensions/vulkan/bones/bin/bones-flatpak";
-pub(crate) const FLATPAK_META_KEY: &str = "command=";
-pub(crate) const FLATPAK_INFO: &str = "info";
-pub(crate) const FLATPAK_SHOW_META: &str = "--show-metadata";
 
 pub(crate) const CONFIG_SEP: char = ';';
 pub(crate) const POLL_BLOCK: i32 = -1;

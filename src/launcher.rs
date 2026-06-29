@@ -14,11 +14,8 @@ use crate::consts::EXIT_OK;
 use crate::consts::ENV_CONFIG_NAME;
 use crate::consts::ENV_ENABLE;
 use crate::consts::FLATPAK_CMD;
-use crate::consts::FLATPAK_INFO;
 use crate::consts::FLATPAK_INJECT;
-use crate::consts::FLATPAK_META_KEY;
 use crate::consts::FLATPAK_RUN;
-use crate::consts::FLATPAK_SHOW_META;
 use crate::consts::HEAD;
 use crate::consts::USAGE;
 use crate::env::env_bypass_active;
@@ -86,29 +83,9 @@ fn flatpak_trailing(cmd: &[String]) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn parse_meta_command(text: &str) -> Option<String> {
-    text.lines()
-        .find(|l| l.starts_with(FLATPAK_META_KEY))
-        .map(|l| l[FLATPAK_META_KEY.len()..].trim().to_string())
-}
-
-fn call_flatpak_meta(app_id: &str) -> Option<String> {
-    Command::new(FLATPAK_CMD)
-        .args([FLATPAK_INFO, FLATPAK_SHOW_META, app_id])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|t| parse_meta_command(&t))
-}
-
-fn app_command(app_id: &str) -> String {
-    call_flatpak_meta(app_id).unwrap_or_else(|| app_id.to_string())
-}
-
 fn build_flatpak_args(
     profile: &str,
     app_id: &str,
-    app_cmd: &str,
     flags: &[String],
     trailing: &[String],
 ) -> Vec<String> {
@@ -116,11 +93,10 @@ fn build_flatpak_args(
         vec![
             FLATPAK_RUN.to_string(),
             format!("--command={}", FLATPAK_INJECT),
-            format!("--env={}={}", ENV_ENABLE, ENABLE_VALUE),
             format!("--env={}={}", ENV_CONFIG_NAME, profile),
         ],
         flags.to_vec(),
-        vec![app_id.to_string(), app_cmd.to_string()],
+        vec![app_id.to_string()],
         trailing.to_vec(),
     ]
     .concat()
@@ -163,7 +139,6 @@ fn exec_flatpak(cmd: &[String], profile: &str) -> i32 {
             let args = build_flatpak_args(
                 profile,
                 &app_id,
-                &app_command(&app_id),
                 &flatpak_user_flags(cmd),
                 &flatpak_trailing(cmd),
             );

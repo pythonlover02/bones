@@ -20,11 +20,11 @@ Bones is a realtime post-processing layer for Vulkan games on Linux, written in 
 - **Env-mode**: define an entire effect stack and every general setting in environment variables. Used together, env vars completely bypass the config file (no read, no write, no watch) perfect for reproducible launches, containers, and Steam Decks.
 - **Hot reload** (file mode only): edit the config while the game runs; the shader recompiles live.
 - **Dual-arch**: x86_64 + i686 builds in one install, so 32-bit games on Steam / Wine / Proton get the layer too.
-- **Flatpak support**, first-class, via a runtime extension.
+- **Flatpak support**, first-class, via a runtime extension. Works with or without the host launcher (atomic distros).
 
 ## Quick Start
 
-```sh
+```
 # 1. Build and install
 git clone https://github.com/pythonlover02/bones.git
 cd bones
@@ -37,7 +37,7 @@ BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/g
 
 Prefer a config file? On first run Bones writes a fully documented `~/.config/bones/bones-config.toml`. Set any effect to `true`, then:
 
-```sh
+```
 bones -- ~/games/mygame
 ```
 
@@ -57,6 +57,7 @@ bones -- %command%
 - [Installation](#installation)
 - [FEX-Emu / Box64](#fex-emu--box64)
 - [Flatpak](#flatpak)
+- [Flatpak without the launcher (atomic distros)](#flatpak-without-the-launcher-atomic-distros)
 - [Usage](#usage)
 - [Environment Variables](#environment-variables)
 - [Effect Catalogue](#effect-catalogue)
@@ -81,7 +82,7 @@ Native aarch64 builds are not provided. See [FEX-Emu / Box64](#fex-emu--box64) i
 
 Bones registers as an implicit Vulkan layer (`VK_LAYER_BONES_overlay`) via the manifest at `/usr/share/vulkan/implicit_layer.d/VkLayer_bones.json`. The manifest declares `enable_environment = BONES_ENABLE`, so the Vulkan loader always discovers the layer but only activates it when `BONES_ENABLE=1` is set in the target process's environment.
 
-The `bones` launcher sets `BONES_ENABLE=1` on the child process before exec, on both the native path (a plain `Command::exec` with `BONES_ENABLE` and `BONES_CONFIG_NAME` injected into the child env) and the Flatpak path (where the launcher rewrites `flatpak run` to add `--env=BONES_ENABLE=1` and `--env=BONES_CONFIG_NAME=<profile>` so the variables cross the sandbox boundary). On the Flatpak path, the launcher also redirects execution through a small wrapper (`bones-flatpak`) shipped inside the Flatpak runtime extension, which sets the in-sandbox `VK_ADD_LAYER_PATH` and `LD_LIBRARY_PATH` the launcher can't know about from outside the sandbox.
+The `bones` launcher sets `BONES_ENABLE=1` on the child process before exec on the native path (a plain `Command::exec` with `BONES_ENABLE` and `BONES_CONFIG_NAME` injected into the child env). On the Flatpak path, the launcher rewrites `flatpak run` to add `--env=BONES_CONFIG_NAME=<profile>` and redirects execution through a small wrapper (`bones-flatpak`) shipped inside the Flatpak runtime extension; the wrapper sets `BONES_ENABLE=1`, `VK_ADD_LAYER_PATH`, and `LD_LIBRARY_PATH` inside the sandbox and execs the application's entry point.
 
 At `vkQueuePresentKHR`, the layer:
 
@@ -177,13 +178,13 @@ Each Make target does one thing. Nothing builds implicitly except the build targ
 
 Download the latest release from the [Releases](../../releases) page, extract, and from inside the extracted directory:
 
-```sh
+```
 sudo make install
 ```
 
 ### Building from source
 
-```sh
+```
 git clone https://github.com/pythonlover02/bones.git
 cd bones
 make                      # native 64-bit build
@@ -208,7 +209,7 @@ The 32-bit build requires `rustup target add i686-unknown-linux-gnu`, `gcc-multi
 
 Because the manifest is installed to the system-wide Vulkan implicit-layer directory and libraries are installed to standard distro-specific library paths, 32-bit games discover the 32-bit layer and 64-bit games discover the 64-bit layer automatically. The Vulkan loader picks up the manifest with no custom `VK_ADD_LAYER_PATH` mapping required, and the launcher gates activation per-process via `BONES_ENABLE=1`.
 
-```sh
+```
 sudo make install DESTDIR=./package    # stage into a directory (packaging)
 ```
 
@@ -219,7 +220,7 @@ To install flatpak bundles built with `make flatpak`, run `sudo make flatpak-ins
 
 ### Uninstalling
 
-```sh
+```
 sudo make uninstall
 ```
 
@@ -227,7 +228,7 @@ Removes launcher, library (both architectures), manifest, user-scope flatpak ext
 
 ### Cleaning build artifacts
 
-```sh
+```
 make clean          # cargo clean + remove flatpak/, container stamps
 make flatpak-clean  # remove only flatpak bundles + workdir
 ```
@@ -244,7 +245,7 @@ If your aarch64 host is configured to transparently execute x86_64 binaries typi
 
 Flatpak itself does **not** translate between architectures. An x86_64 Flatpak runtime contains x86_64 binaries that need an x86_64 CPU to execute; on aarch64, that requires the kernel-level translation setup above. Set that up first, consulting your translation layer's documentation, then:
 
-```sh
+```
 make
 make 32             # required for the flatpak bundle
 make flatpak
@@ -253,7 +254,7 @@ sudo make flatpak-install
 
 The x86_64 Flatpak runtime must be installed on the host:
 
-```sh
+```
 flatpak install org.freedesktop.Platform//24.08 --arch=x86_64
 ```
 
@@ -263,7 +264,7 @@ See [Flatpak](#flatpak) for full details.
 
 Build the x86_64 layer (and optionally the i686 layer) on the host, then point `DESTDIR` at the directory the translation layer uses as its root:
 
-```sh
+```
 make                                                  # build x86_64
 make 32                                               # optional, for 32-bit games
 sudo make DESTDIR=/path/to/translation-root install
@@ -275,13 +276,13 @@ After installing, the layer manifest lives at `<root>/usr/share/vulkan/implicit_
 
 To uninstall the layer from the translation layer's root:
 
-```sh
+```
 sudo make DESTDIR=/path/to/translation-root uninstall
 ```
 
 To uninstall the Flatpak extension and the host-side per-user config (`~/.config/bones`):
 
-```sh
+```
 sudo make uninstall
 ```
 
@@ -289,9 +290,9 @@ These are independent running one doesn't affect the other. If you installed bot
 
 ## Flatpak
 
-Flatpak applications run sandboxed and cannot see `VK_ADD_LAYER_PATH` or `BONES_ENABLE` set on the host those variables do not cross the sandbox boundary by default. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox.
+Flatpak applications run sandboxed and cannot see `VK_ADD_LAYER_PATH` set on the host that variable does not cross the sandbox boundary. Bones supports Flatpak through a **Flatpak extension**: a bundle that mounts the library, the layer manifest, and a small wrapper script (`bones-flatpak`) inside the `org.freedesktop.Platform` runtime, so they are reachable from within the sandbox.
 
-When you run `bones -- flatpak run …`, the launcher rewrites the command to inject `--env=BONES_ENABLE=1` and `--env=BONES_CONFIG_NAME=<profile>` into the `flatpak run` invocation, and redirects execution through `bones-flatpak` inside the sandbox via `--command=bones-flatpak`. The wrapper then sets `VK_ADD_LAYER_PATH` and `LD_LIBRARY_PATH` to point at the in-sandbox extension and execs the original entry point.
+When you run `bones -- flatpak run …`, the launcher rewrites the command to inject `--env=BONES_CONFIG_NAME=<profile>` into the `flatpak run` invocation and redirects execution through `bones-flatpak` inside the sandbox via `--command=`. The wrapper sets `BONES_ENABLE=1`, `VK_ADD_LAYER_PATH`, and `LD_LIBRARY_PATH`, then execs the application's entry point (read from `/app/manifest.json`).
 
 Extensions are built for runtime versions `23.08`, `24.08`, and `25.08`.
 
@@ -299,7 +300,7 @@ Extensions are built for runtime versions `23.08`, `24.08`, and `25.08`.
 
 Requires `flatpak`, `ostree`, `python3`, both a 64-bit and a 32-bit build, and a completed `make` (or `make release`) build.
 
-```sh
+```
 make            # 64-bit
 make 32         # 32-bit, required by the flatpak bundle
 make flatpak
@@ -319,38 +320,62 @@ The bundle always includes the 32-bit library, so Flatpak games that run 32-bit 
 
 Install the bundle matching your `org.freedesktop.Platform` runtime. Run `flatpak list` and look for `org.freedesktop.Platform` if unsure.
 
-```sh
+```
 flatpak install --user org.freedesktop.Platform.VulkanLayer.bones-24.08.flatpak
 ```
 
 Multiple runtime versions can coexist. If you ran `sudo make flatpak-install` with the extensions already built, theyre installed automatically for the invoking user.
 
-```sh
+```
 flatpak uninstall --user org.freedesktop.Platform.VulkanLayer.bones
 ```
 
 ### Running a Flatpak application through Bones
 
-```sh
+```
 bones -- flatpak run com.example.Game
 bones -- flatpak run --branch=stable com.example.Game   # flags pass through
 bones myprofile -- flatpak run com.example.Game          # named profile
 ```
 
-The launcher detects the `flatpak run` invocation, reads the application metadata via `flatpak info --show-metadata` to find its entry point, and rewrites the command to run `bones-flatpak` inside the sandbox with `BONES_ENABLE=1` and `BONES_CONFIG_NAME=<profile>` injected as sandbox env vars. The wrapper sets the in-sandbox library / layer paths and execs the entry point.
+The launcher detects the `flatpak run` invocation and rewrites the command to run `bones-flatpak` inside the sandbox with `BONES_CONFIG_NAME=<profile>` injected as a sandbox env var. The wrapper handles everything else from inside the sandbox.
+
+### Flatpak without the launcher (atomic distros)
+
+On atomic / immutable distros (Fedora Silverblue / Kinoite, Bazzite, SteamOS, …) `/usr/bin` is read-only and `sudo make install` is not viable. Install only the Flatpak extension with `sudo make flatpak-install` and invoke `bones-flatpak` directly via `flatpak run --command=`:
+
+```
+flatpak run --command=/usr/lib/extensions/vulkan/bones/bin/bones-flatpak com.example.Game
+```
+
+The wrapper exports `BONES_ENABLE=1`, sets the in-sandbox library / layer paths, reads the entry point from `/app/manifest.json`, and execs it. No host side launcher needed. For a named profile or env-mode, prepend the variables on the shell Flatpak passes `BONES_*` env vars through to the sandbox transparently:
+
+```
+BONES_CONFIG_NAME=retro flatpak run --command=/usr/lib/extensions/vulkan/bones/bin/bones-flatpak com.example.Game
+```
+
+```
+BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen" flatpak run --command=/usr/lib/extensions/vulkan/bones/bin/bones-flatpak com.example.Game
+```
+
+The config file at `~/.config/bones/` should be visible inside the sandbox through the user home directory, so profiles and hot reload work the same as on the native path. The same applies to env vars Flatpak passes `BONES_*` variables through to the sandbox transparently, so any of them (`BONES_CONFIG`, `BONES_CONFIG_NAME`, `BONES_RESOLUTION_SCALE`, etc.) can be set on the host shell or as Steam launch options and they reach the wrapper unchanged.
 
 ### Steam launch option (Flatpak)
 
-Set the game **Launch Options** to the in-sandbox wrapper absolute path:
+Set the game **Launch Options** to the in-sandbox wrapper:
 
 ```
 /usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
 ```
 
-With a named profile:
+With env vars (any `BONES_*` variable works, the home directory is mounted so configs and profiles resolve the same way):
 
 ```
-BONES_CONFIG_NAME=myprofile /usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
+BONES_CONFIG_NAME=retro /usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
+```
+
+```
+BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen" /usr/lib/extensions/vulkan/bones/bin/bones-flatpak %command%
 ```
 
 This requires the Bones Flatpak extension matching the game runtime to be installed.
@@ -371,7 +396,7 @@ Pass `--` to separate launcher options from the command. Anything before `--` is
 
 A profile is a named config at `~/.config/bones/<name>-config.toml`. The default profile when no name is given is `bones` (`bones-config.toml`). Profile names are sanitized characters outside `[A-Za-z0-9_-]` are stripped. Pass a name to load a different one:
 
-```sh
+```
 bones retro -- ~/games/retro-game   # loads ~/.config/bones/retro-config.toml
 ```
 
@@ -389,7 +414,7 @@ In env-mode (see below), no config file is read or written at all the launcher d
 
 Setting any of the BONES_* general environment variables takes over from the file entirely no read, no write, no inotify watch. Hot reload is implicitly off in env-mode (nothing to watch). Use this for reproducible launches:
 
-```sh
+```
 BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" \
 BONES_RESOLUTION_SCALE=0.75 \
 BONES_COMPUTE=true \
@@ -431,7 +456,7 @@ With `hot_reload = true` and no `BONES_*` env vars set, Bones uses `inotify` to 
 | `BONES_CONFIG_NAME` | Which profile to load. Set automatically by the launcher from the profile argument; can also be set manually. | any profile name (sanitized) | `bones` |
 | `BONES_LOG` | Log verbosity (written to stderr) | `off`, `error`, `warn`, `info` | `warn` |
 
-`BONES_ENABLE=1` is set automatically by the launcher on the child process (native) or injected into the Flatpak sandbox (via `--env=`) to activate the implicit layer. It is not something users set manually. On the Flatpak path, the in-sandbox wrapper additionally sets `VK_ADD_LAYER_PATH` and `LD_LIBRARY_PATH` so the loader can find the manifest and library inside the runtime extension.
+`BONES_ENABLE=1` is set automatically by the launcher on the child process (native path) or by the `bones-flatpak` wrapper inside the sandbox (Flatpak path) to activate the implicit layer. It is not something users set manually. On the Flatpak path, the wrapper additionally sets `VK_ADD_LAYER_PATH` and `LD_LIBRARY_PATH` so the loader can find the manifest and library inside the runtime extension.
 
 ## Effect Catalogue
 
@@ -752,7 +777,7 @@ Overlays render after all processing (temporal, colour grading, accessibility, h
 
 Copy-paste these as `BONES_CONFIG` values, or set the same keys in your config file. Each respects the one-per-category rule.
 
-```sh
+```
 # Crisp modern look: AA + sharpen + smart saturation
 BONES_CONFIG="subpixel_aa;contrast_adaptive_sharpen;vibrance_boost" bones -- ~/games/game
 

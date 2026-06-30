@@ -116,21 +116,26 @@ fn sync2_image_barrier(b: &BarrierDesc) -> vk::ImageMemoryBarrier2 {
     }
 }
 
+fn combine_src_stage(descs: &[BarrierDesc]) -> vk::PipelineStageFlags {
+    descs.iter().fold(vk::PipelineStageFlags::empty(), |acc, d| acc | d.src_stage)
+}
+
+fn combine_dst_stage(descs: &[BarrierDesc]) -> vk::PipelineStageFlags {
+    descs.iter().fold(vk::PipelineStageFlags::empty(), |acc, d| acc | d.dst_stage)
+}
+
 fn emit_legacy_batch(dev: &VkDevState, cb: vk::CommandBuffer, descs: &[BarrierDesc]) {
-    descs.iter().for_each(|d| {
-        let m = legacy_image_barrier(d);
-        unsafe {
-            dev.device.cmd_pipeline_barrier(
-                cb,
-                d.src_stage,
-                d.dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[m],
-            )
-        };
-    });
+    unsafe {
+        dev.device.cmd_pipeline_barrier(
+            cb,
+            combine_src_stage(descs),
+            combine_dst_stage(descs),
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &descs.iter().map(legacy_image_barrier).collect::<Vec<_>>(),
+        )
+    };
 }
 
 fn emit_sync2_batch(dev: &VkDevState, fp: &vk::KhrSynchronization2Fn, cb: vk::CommandBuffer, descs: &[BarrierDesc]) {

@@ -118,8 +118,14 @@ fn new_compiler() -> Result<shaderc::Compiler, ()> {
     shaderc::Compiler::new().ok_or_else(|| log_at(LogLevel::Error, "shaderc compiler init failed"))
 }
 
+fn configure_options(mut o: shaderc::CompileOptions<'static>) -> shaderc::CompileOptions<'static> {
+    o.set_optimization_level(shaderc::OptimizationLevel::Performance);
+    o
+}
+
 fn new_compile_options() -> Result<shaderc::CompileOptions<'static>, ()> {
     shaderc::CompileOptions::new()
+        .map(configure_options)
         .ok_or_else(|| log_at(LogLevel::Error, "shaderc options init failed"))
 }
 

@@ -5,6 +5,7 @@ use std::ffi::CString;
 use std::mem;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::thread;
 
 use ash::vk;
 use ash::vk::Handle;
@@ -192,8 +193,12 @@ fn original_ext_cstrings(ci: &vk::DeviceCreateInfo) -> Vec<CString> {
         .collect()
 }
 
+fn ext_is_present(exts: &[CString], name: &str) -> bool {
+    exts.contains(&CString::new(name).unwrap_or_default())
+}
+
 fn add_if_chosen(chosen: bool, name: &str, exts: &mut Vec<CString>) {
-    match chosen {
+    match chosen && !ext_is_present(exts, name) {
         true => exts.push(CString::new(name).unwrap_or_default()),
         false => (),
     }
@@ -498,11 +503,14 @@ fn invoke_create_device(
     }
 }
 
+fn spawn_shader_rebuild(s: Settings) {
+    thread::spawn(move || store_shaders(build_shaders(&s, &REGISTRY)));
+}
+
 fn apply_caps_and_rebuild_shaders(s: &Settings, caps: &DeviceCaps) {
     set_wg_limits(caps.max_wg_x, caps.max_wg_y, caps.max_wg_invocations);
     let _ = crate::shader::compile_vert_spirv();
-    let spv = build_shaders(s, &REGISTRY);
-    store_shaders(spv);
+    spawn_shader_rebuild(s.clone());
 }
 
 pub(crate) fn call_real_create_device(

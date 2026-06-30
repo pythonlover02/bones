@@ -12,13 +12,9 @@ pub(crate) const ENV_CONFIG: &str = "BONES_CONFIG";
 pub(crate) const ENV_LOG: &str = "BONES_LOG";
 
 pub(crate) const ENV_RES_SCALE: &str = "BONES_RESOLUTION_SCALE";
-pub(crate) const ENV_OPT_FP16: &str = "BONES_OPTIMIZE_FP16";
 pub(crate) const ENV_OPT_DYNREN: &str = "BONES_OPTIMIZE_DYNAMIC_RENDERING";
 pub(crate) const ENV_OPT_PUSHDESC: &str = "BONES_OPTIMIZE_PUSH_DESCRIPTORS";
-pub(crate) const ENV_OPT_SUBGROUP: &str = "BONES_OPTIMIZE_SUBGROUP_OPS";
 pub(crate) const ENV_OPT_SYNC2: &str = "BONES_OPTIMIZE_SYNC2";
-pub(crate) const ENV_OPT_SUBGROUP_EXT_TYPES: &str = "BONES_OPTIMIZE_SUBGROUP_EXTENDED_TYPES";
-pub(crate) const ENV_OPT_SUBGROUP_UNIFORM_FLOW: &str = "BONES_OPTIMIZE_SUBGROUP_UNIFORM_FLOW";
 pub(crate) const ENV_OPT_ASYNC_COMPUTE: &str = "BONES_OPTIMIZE_ASYNC_COMPUTE";
 pub(crate) const ENV_COMPUTE: &str = "BONES_COMPUTE";
 pub(crate) const ENV_COMPUTE_X: &str = "BONES_COMPUTE_X";
@@ -33,15 +29,10 @@ pub(crate) const FLATPAK_INJECT: &str = "/usr/lib/extensions/vulkan/bones/bin/bo
 pub(crate) const CONFIG_SEP: char = ';';
 pub(crate) const POLL_BLOCK: i32 = -1;
 
-pub(crate) const HOT_RELOAD_KEY: &str = "hot_reload";
 pub(crate) const RES_SCALE_KEY: &str = "resolution_scale";
-pub(crate) const OPT_FP16_KEY: &str = "optimize_fp16";
 pub(crate) const OPT_DYNREN_KEY: &str = "optimize_dynamic_rendering";
 pub(crate) const OPT_PUSHDESC_KEY: &str = "optimize_push_descriptors";
-pub(crate) const OPT_SUBGROUP_KEY: &str = "optimize_subgroup_ops";
 pub(crate) const OPT_SYNC2_KEY: &str = "optimize_sync2";
-pub(crate) const OPT_SUBGROUP_EXT_TYPES_KEY: &str = "optimize_subgroup_extended_types";
-pub(crate) const OPT_SUBGROUP_UNIFORM_FLOW_KEY: &str = "optimize_subgroup_uniform_flow";
 pub(crate) const OPT_ASYNC_COMPUTE_KEY: &str = "optimize_async_compute";
 pub(crate) const COMPUTE_KEY: &str = "compute";
 pub(crate) const COMPUTE_X_KEY: &str = "compute_x";
@@ -52,24 +43,15 @@ pub(crate) const RES_SCALE_DEFAULT: f32 = 1.0;
 pub(crate) const COMPUTE_X_DEFAULT: u32 = 8;
 pub(crate) const COMPUTE_Y_DEFAULT: u32 = 8;
 
-pub(crate) const EXT_FP16: &str = "VK_KHR_shader_float16_int8";
 pub(crate) const EXT_DYN_RENDER: &str = "VK_KHR_dynamic_rendering";
 pub(crate) const EXT_PUSH_DESC: &str = "VK_KHR_push_descriptor";
 pub(crate) const EXT_MUTABLE_FMT: &str = "VK_KHR_swapchain_mutable_format";
 pub(crate) const EXT_SYNCHRONIZATION2: &str = "VK_KHR_synchronization2";
-pub(crate) const EXT_SUBGROUP_EXT_TYPES: &str = "VK_KHR_shader_subgroup_extended_types";
-pub(crate) const EXT_SUBGROUP_UNIFORM_FLOW: &str = "VK_KHR_shader_subgroup_uniform_control_flow";
-pub(crate) const SUBGROUP_LABEL: &str = "Vulkan 1.1 subgroup operations";
 
-pub(crate) const GENERAL_BOOL_KEYS: [&str; 10] = [
-    HOT_RELOAD_KEY,
-    OPT_FP16_KEY,
+pub(crate) const GENERAL_BOOL_KEYS: [&str; 5] = [
     OPT_DYNREN_KEY,
     OPT_PUSHDESC_KEY,
-    OPT_SUBGROUP_KEY,
     OPT_SYNC2_KEY,
-    OPT_SUBGROUP_EXT_TYPES_KEY,
-    OPT_SUBGROUP_UNIFORM_FLOW_KEY,
     OPT_ASYNC_COMPUTE_KEY,
     COMPUTE_KEY,
 ];
@@ -113,13 +95,6 @@ pub(crate) const HEAD: &str = r#"##bones default profile
 # look you find good.
 
 [general]
-# hot_reload to watch the config directory and recompile shader on save.
-# note: if any BONES_* general env var is set (BONES_CONFIG,
-# BONES_RESOLUTION_SCALE, BONES_OPTIMIZE_*, BONES_COMPUTE*) this file is
-# fully bypassed (not read, not written, not watched). hot reload requires
-# file mode.
-hot_reload = true
-
 # resolution_scale to scale the post-fx render target relative to the swap
 # chain. 1.0 = render at native resolution. 0.5 = render the entire
 # post-fx pipeline at half resolution then bilinear upscale to native at
@@ -129,12 +104,6 @@ hot_reload = true
 # re-create the swapchain (resize the window, toggle fullscreen, etc).
 # env: BONES_RESOLUTION_SCALE
 resolution_scale = 1.0
-
-# optimize_fp16 to enable VK_KHR_shader_float16_int8 at device creation
-# when the physical device supports it. if the device does not
-# advertise the extension you will see a log line saying so and the
-# layer keeps running with fp32. on by default. env: BONES_OPTIMIZE_FP16
-optimize_fp16 = true
 
 # optimize_dynamic_rendering to enable VK_KHR_dynamic_rendering at device
 # creation when supported. logged at device creation when not
@@ -146,12 +115,6 @@ optimize_dynamic_rendering = true
 # env: BONES_OPTIMIZE_PUSH_DESCRIPTORS
 optimize_push_descriptors = true
 
-# optimize_subgroup_ops to advertise that subgroup operations should be
-# used when available. checked against Vulkan 1.1 core subgroup
-# support at device creation. logged when not available. on by default.
-# env: BONES_OPTIMIZE_SUBGROUP_OPS
-optimize_subgroup_ops = true
-
 # optimize_sync2 to enable VK_KHR_synchronization2 at device creation
 # when supported. enables batched pipeline barriers via
 # vkCmdPipelineBarrier2 with 64-bit stage masks. reduces per-frame CPU
@@ -159,19 +122,6 @@ optimize_subgroup_ops = true
 # barrier pairs into single calls. logged when not available. on by
 # default. env: BONES_OPTIMIZE_SYNC2
 optimize_sync2 = true
-
-# optimize_subgroup_extended_types to enable
-# VK_KHR_shader_subgroup_extended_types at device creation when
-# supported. allows subgroup operations on 8/16/64-bit and bool types
-# in shaders. on by default. env: BONES_OPTIMIZE_SUBGROUP_EXTENDED_TYPES
-optimize_subgroup_extended_types = true
-
-# optimize_subgroup_uniform_flow to enable
-# VK_KHR_shader_subgroup_uniform_control_flow at device creation when
-# supported. declares that subgroup operations execute under uniform
-# control flow allowing more aggressive driver optimization. on by
-# default. env: BONES_OPTIMIZE_SUBGROUP_UNIFORM_FLOW
-optimize_subgroup_uniform_flow = true
 
 # optimize_async_compute to submit post-fx work on a dedicated async
 # compute queue family when one is available. lets the post-fx
@@ -1224,12 +1174,6 @@ void main() {
 "#;
 
 pub(crate) const UBER_SRC: &str = r#"#version 460
-#ifdef BONES_HAS_SUBGROUP_EXT_TYPES
-#extension GL_EXT_shader_subgroup_extended_types_int8 : enable
-#extension GL_EXT_shader_subgroup_extended_types_int16 : enable
-#extension GL_EXT_shader_subgroup_extended_types_int64 : enable
-#extension GL_EXT_shader_subgroup_extended_types_float16 : enable
-#endif
 #ifdef COMPUTE_PATH
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = LOCAL_SIZE_Y, local_size_z = 1) in;
 layout(set=0, binding=0) uniform sampler2D u_input;

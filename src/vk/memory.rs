@@ -8,12 +8,21 @@ pub(crate) fn find_mem_type(props: &vk::PhysicalDeviceMemoryProperties, bits: u3
         .unwrap_or(0)
 }
 
-pub(crate) fn create_offscreen_image_with_usage(
+fn sharing_for_families(families: &[u32]) -> (vk::SharingMode, u32, *const u32) {
+    match families.len() >= 2 {
+        true => (vk::SharingMode::CONCURRENT, families.len() as u32, families.as_ptr()),
+        false => (vk::SharingMode::EXCLUSIVE, 0, std::ptr::null()),
+    }
+}
+
+pub(crate) fn create_offscreen_image_shared(
     dev: &VkDevState,
     extent: vk::Extent2D,
     format: vk::Format,
     usage: vk::ImageUsageFlags,
+    families: &[u32],
 ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    let (sharing_mode, family_count, family_ptr) = sharing_for_families(families);
     let ici = vk::ImageCreateInfo {
         image_type: vk::ImageType::TYPE_2D,
         format,
@@ -23,7 +32,9 @@ pub(crate) fn create_offscreen_image_with_usage(
         samples: vk::SampleCountFlags::TYPE_1,
         tiling: vk::ImageTiling::OPTIMAL,
         usage,
-        sharing_mode: vk::SharingMode::EXCLUSIVE,
+        sharing_mode,
+        queue_family_index_count: family_count,
+        p_queue_family_indices: family_ptr,
         initial_layout: vk::ImageLayout::UNDEFINED,
         ..Default::default()
     };
@@ -52,6 +63,15 @@ pub(crate) fn create_offscreen_image_with_usage(
     Ok((img, mem, view))
 }
 
+pub(crate) fn create_offscreen_image_with_usage(
+    dev: &VkDevState,
+    extent: vk::Extent2D,
+    format: vk::Format,
+    usage: vk::ImageUsageFlags,
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    create_offscreen_image_shared(dev, extent, format, usage, &[])
+}
+
 pub(crate) fn create_offscreen_image(
     dev: &VkDevState,
     extent: vk::Extent2D,
@@ -68,6 +88,24 @@ pub(crate) fn create_offscreen_image(
     )
 }
 
+pub(crate) fn create_offscreen_image_concurrent(
+    dev: &VkDevState,
+    extent: vk::Extent2D,
+    format: vk::Format,
+    families: &[u32],
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    create_offscreen_image_shared(
+        dev,
+        extent,
+        format,
+        vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        families,
+    )
+}
+
 pub(crate) fn create_compute_output_image(
     dev: &VkDevState,
     extent: vk::Extent2D,
@@ -81,5 +119,23 @@ pub(crate) fn create_compute_output_image(
             | vk::ImageUsageFlags::TRANSFER_DST
             | vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::STORAGE,
+    )
+}
+
+pub(crate) fn create_compute_output_image_concurrent(
+    dev: &VkDevState,
+    extent: vk::Extent2D,
+    format: vk::Format,
+    families: &[u32],
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    create_offscreen_image_shared(
+        dev,
+        extent,
+        format,
+        vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::STORAGE,
+        families,
     )
 }

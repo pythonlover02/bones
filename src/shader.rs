@@ -24,7 +24,6 @@ static SHADER_COMP_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
 static SHADER_WG: RwLock<(u32, u32)> = RwLock::new((COMPUTE_X_DEFAULT, COMPUTE_Y_DEFAULT));
 static VERT_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
 static WG_LIMITS: RwLock<(u32, u32, u32)> = RwLock::new((u32::MAX, u32::MAX, u32::MAX));
-static SUBGROUP_CAPS: RwLock<(bool, bool)> = RwLock::new((false, false));
 pub(crate) static GENERATION: AtomicI32 = AtomicI32::new(0);
 
 fn split_first_line(src: &str) -> (&str, &str) {
@@ -93,37 +92,11 @@ pub(crate) fn set_wg_limits(max_x: u32, max_y: u32, max_inv: u32) {
     }
 }
 
-pub(crate) fn set_subgroup_caps(ext_types: bool, uniform_flow: bool) {
-    match SUBGROUP_CAPS.write() {
-        Ok(mut g) => *g = (ext_types, uniform_flow),
-        Err(_) => (),
-    }
-}
-
-fn subgroup_define_block(ext_types: bool, uniform_flow: bool) -> String {
-    let mut out = String::new();
-    match ext_types {
-        true => out.push_str("#define BONES_HAS_SUBGROUP_EXT_TYPES\n"),
-        false => (),
-    }
-    match uniform_flow {
-        true => out.push_str("#define BONES_HAS_SUBGROUP_UNIFORM_FLOW\n"),
-        false => (),
-    }
-    out
-}
-
-fn current_subgroup_caps() -> (bool, bool) {
-    SUBGROUP_CAPS.read().map(|g| *g).unwrap_or((false, false))
-}
-
 fn assemble_frag_source(s: &Settings, reg: &[EffectDef]) -> String {
     let (ver, rest) = split_first_line(UBER_SRC);
-    let (ext, uni) = current_subgroup_caps();
     format!(
-        "{}\n{}{}{}",
+        "{}\n{}{}",
         ver,
-        subgroup_define_block(ext, uni),
         emit_defines(s, reg),
         rest
     )
@@ -131,13 +104,11 @@ fn assemble_frag_source(s: &Settings, reg: &[EffectDef]) -> String {
 
 fn assemble_comp_source(s: &Settings, reg: &[EffectDef], wg_x: u32, wg_y: u32) -> String {
     let (ver, rest) = split_first_line(UBER_SRC);
-    let (ext, uni) = current_subgroup_caps();
     format!(
-        "{}\n#define COMPUTE_PATH\n#define LOCAL_SIZE_X {}\n#define LOCAL_SIZE_Y {}\n{}{}{}",
+        "{}\n#define COMPUTE_PATH\n#define LOCAL_SIZE_X {}\n#define LOCAL_SIZE_Y {}\n{}{}",
         ver,
         wg_x,
         wg_y,
-        subgroup_define_block(ext, uni),
         emit_defines(s, reg),
         rest
     )

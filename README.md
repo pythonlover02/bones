@@ -13,12 +13,12 @@ Bones is a realtime post-processing layer for Vulkan games on Linux, written in 
 - **One shader, one dispatch.** Effects are `#ifdef`-toggled in a single ubershader. VRAM is O(1) three textures total, regardless of how many effects you stack.
 - **Compute path by default**, fragment fallback. Compute skips the rasterizer for tighter scheduling and better extension composition; fragment kicks in automatically when the device doesnt support the storage-image features the compute path needs.
 - **Vulkan extension fast paths**: `VK_KHR_shader_float16_int8`, `VK_KHR_dynamic_rendering`, `VK_KHR_push_descriptor`, `VK_KHR_synchronization2`, Vulkan 1.1 subgroup ops, `VK_KHR_swapchain_mutable_format`. Each is queried at device creation; missing pieces log a single line and the layer keeps running.
-- **Async compute**: when the compute path is active and rendering at native 1:1 resolution (`resolution_scale = 1.0`), Bones automatically discovers and utilizes a dedicated async compute queue if the device exposes one not used by the game, allowing post-fx to run concurrently with the game next-frame rendering.
+- **Async compute**: when the compute path is active, Bones automatically discovers and utilizes a dedicated async compute queue if the device exposes one not used by the game. The compute dispatch runs on the async queue concurrently with the game next-frame rendering; the final blit to the swap image runs on the present queue, with a semaphore between them. Works at any `resolution_scale`.
 - **Resolution scale knob**: render the whole pipeline at any fraction of the swapchain (≥0.05) and upscale at the final blit. Big win on weak GPUs and heavy stacks.
 - **Skipped input copy**: the swap image is sampled directly via per-image views no spare full-frame copy per frame.
-- **Lazy postfx allocation**: when no effects are enabled, nothing is built. Toggle one on at runtime via hot reload and it spins up on the next present.
+- **Lazy postfx allocation**: when no effects are enabled, nothing is built. Toggle one on at runtime and it spins up on the next present.
 - **Env-mode**: define an entire effect stack and every general setting in environment variables. Used together, env vars completely bypass the config file (no read, no write, no watch) perfect for reproducible launches, containers, and Steam Decks.
-- **Hot reload** (file mode only): edit the config while the game runs; the shader recompiles live.
+- **Hot reload** (file mode only): edit the config while the game runs. The shader recompiles live, and pipeline settings (`resolution_scale`, `compute`, etc.) seamlessly rebuild resources on the fly.
 - **Dual-arch**: x86_64 + i686 builds in one install, so 32-bit games on Steam / Wine / Proton get the layer too.
 - **Flatpak support**, first-class, via a runtime extension. Works with or without the host launcher (atomic distros).
 
@@ -118,15 +118,11 @@ Each is opt-in via TOML (`optimize_*` keys) or env var (`BONES_OPTIMIZE_*`), def
 
 | Extension / Feature | What it enables | If missing |
 |---|---|---|
-| `VK_KHR_shader_float16_int8` | fp16 math in the shader | logs warning, runs fp32 |
 | `VK_KHR_dynamic_rendering` | skip render passes / framebuffers | logs warning, uses render passes |
 | `VK_KHR_push_descriptor` | inline descriptor writes per draw | logs warning, uses descriptor sets |
 | `VK_KHR_synchronization2` | efficient batched CPU pipeline barriers | logs warning, uses legacy barriers |
-| Vulkan 1.1 subgroup ops | shared-memory reductions in the shader | logs warning, runs scalar |
-| `VK_KHR_shader_subgroup_extended_types` | subgroup ops on 8/16/64-bit and bool types | logs warning, runs without them |
-| `VK_KHR_shader_subgroup_uniform_control_flow` | tighter driver optimization for subgroup ops | logs warning, runs without it |
 | `VK_KHR_swapchain_mutable_format` | sample sRGB swap images as UNORM (skip input copy) | logs warning, samples native format |
-| Dedicated async compute queue | concurrent post-fx dispatch alongside graphics (at 1.0 scale) | logs warning or disabled by scaling, falls back to present queue |
+| Dedicated async compute queue | concurrent post-fx dispatch alongside graphics | logs warning, falls back to present queue |
 
 The log line for a missing extension always looks like:
 
@@ -140,7 +136,7 @@ So you know exactly what the device is missing.
 
 A single multiplier (`resolution_scale`, default 1.0, minimum 0.05) controls the size of the entire postfx render target relative to the swapchain. Setting it to 0.5 renders all 125 effects at quarter resolution and bilinear-upscales to native at the final blit. On expensive effect stacks this routinely doubles framerate on weaker GPUs at a barely-perceptible cost in sharpness. The history texture follows the same scale, so temporal effects stay aligned.
 
-Because hardware blitting strictly requires a graphics-capable queue, setting `resolution_scale < 1.0` automatically routes submission to the presentation queue, bypassing async compute. If the physical device or surface format fundamentally lacks blitting capabilities (`BLIT_DST` / `BLIT_SRC`), the layer safely falls back to an unscaled 1:1 pixel copy.
+Because hardware blitting strictly requires a graphics-capable queue, the final blit always runs on the present queue regardless of `resolution_scale`. The compute dispatch itself still runs on the async queue when available, so the two queues overlap. If the physical device or surface format fundamentally lacks blitting capabilities (`BLIT_DST` / `BLIT_SRC`), the layer safely falls back to an unscaled 1:1 pixel copy on the present queue.
 
 ### Skip input copy
 
@@ -154,7 +150,7 @@ Effects → off means resources → not built. The layer registers with the swap
 
 Setting any of the following bypasses the config file completely no read, no write, no inotify watch:
 
-`BONES_CONFIG`, `BONES_RESOLUTION_SCALE`, `BONES_OPTIMIZE_FP16`, `BONES_OPTIMIZE_DYNAMIC_RENDERING`, `BONES_OPTIMIZE_PUSH_DESCRIPTORS`, `BONES_OPTIMIZE_SUBGROUP_OPS`, `BONES_OPTIMIZE_SYNC2`, `BONES_OPTIMIZE_SUBGROUP_EXTENDED_TYPES`, `BONES_OPTIMIZE_SUBGROUP_UNIFORM_FLOW`, `BONES_OPTIMIZE_ASYNC_COMPUTE`, `BONES_COMPUTE`, `BONES_COMPUTE_X`, `BONES_COMPUTE_Y`
+`BONES_CONFIG`, `BONES_RESOLUTION_SCALE`, `BONES_OPTIMIZE_DYNAMIC_RENDERING`, `BONES_OPTIMIZE_PUSH_DESCRIPTORS`, `BONES_OPTIMIZE_SYNC2`, `BONES_OPTIMIZE_ASYNC_COMPUTE`, `BONES_COMPUTE`, `BONES_COMPUTE_X`, `BONES_COMPUTE_Y`
 
 This is the reproducibility story: paste one launch command into a Steam launch option, get one exact behavior, every time. `BONES_LOG` and `BONES_CONFIG_NAME` do not trigger bypass; they are meta-config (log verbosity and which profile to load), not pipeline config.
 
@@ -404,7 +400,7 @@ The profile name also crosses into Flatpak sandboxes via `BONES_CONFIG_NAME`, so
 
 ### Configuration file
 
-The default config is generated at `~/.config/bones/bones-config.toml` (or `<profile>-config.toml` if a profile is named) on first run, with every effect listed and documented. Set any effect to `true` under its category section (e.g. `mirror_horizontal = true` under `[geometric]`), and `hot_reload = true` under `[general]` for live reloading. Effects are **toggle-only**, all parameters are baked into the shader.
+The default config is generated at `~/.config/bones/bones-config.toml` (or `<profile>-config.toml` if a profile is named) on first run, with every effect listed and documented. Set any effect to `true` under its category section (e.g. `mirror_horizontal = true` under `[geometric]`). Effects are **toggle-only**, all parameters are baked into the shader.
 
 The `[general]` section also controls the architectural settings: `resolution_scale`, `optimize_fp16`, `optimize_dynamic_rendering`, `optimize_push_descriptors`, `optimize_subgroup_ops`, `compute`, `compute_x`, `compute_y`. Every one of these has documentation in the generated config and a corresponding environment variable (see [Environment Variables](#environment-variables)).
 
@@ -427,7 +423,7 @@ bones -- ~/games/game
 
 ### Hot reload (file mode only)
 
-With `hot_reload = true` and no `BONES_*` env vars set, Bones uses `inotify` to watch the config directory. Save changes and the shader recompiles and reloads without restarting the game. If a reload fails to compile, the previous working shader is kept.
+As long as no `BONES_*` env vars are set, Bones automatically uses `inotify` to watch the config directory. Save changes and the shader recompiles and reloads without restarting the game. Pipeline settings like `resolution_scale`, `compute`, and temporal toggles are also hot-reloadable; Bones will seamlessly recreate textures and framebuffers on the fly. Device-level optimizations (`optimize_sync2`, etc.) cannot be hot-reloaded and require a game restart. If a reload fails to compile, the previous working shader is kept.
 
 ## Environment Variables
 
@@ -437,13 +433,9 @@ With `hot_reload = true` and no `BONES_*` env vars set, Bones uses `inotify` to 
 |----------|---------|--------|---------|
 | `BONES_CONFIG` | Inline effect list | semicolon-separated effect names | *(unset → use file)* |
 | `BONES_RESOLUTION_SCALE` | Postfx render scale | float ≥ 0.05 | `1.0` |
-| `BONES_OPTIMIZE_FP16` | Enable fp16 path if device supports it | `1`/`true`, `0`/`false` | `true` |
 | `BONES_OPTIMIZE_DYNAMIC_RENDERING` | Enable `VK_KHR_dynamic_rendering` | `1`/`true`, `0`/`false` | `true` |
 | `BONES_OPTIMIZE_PUSH_DESCRIPTORS` | Enable `VK_KHR_push_descriptor` | `1`/`true`, `0`/`false` | `true` |
-| `BONES_OPTIMIZE_SUBGROUP_OPS` | Enable Vulkan 1.1 subgroup ops | `1`/`true`, `0`/`false` | `true` |
 | `BONES_OPTIMIZE_SYNC2` | Enable `VK_KHR_synchronization2` | `1`/`true`, `0`/`false` | `true` |
-| `BONES_OPTIMIZE_SUBGROUP_EXTENDED_TYPES` | Enable extended subgroup types | `1`/`true`, `0`/`false` | `true` |
-| `BONES_OPTIMIZE_SUBGROUP_UNIFORM_FLOW` | Enable subgroup uniform control flow | `1`/`true`, `0`/`false` | `true` |
 | `BONES_OPTIMIZE_ASYNC_COMPUTE` | Submit to dedicated async compute queue if available | `1`/`true`, `0`/`false` | `true` |
 | `BONES_COMPUTE` | Use compute shader path | `1`/`true`, `0`/`false` | `true` |
 | `BONES_COMPUTE_X` | Compute workgroup X | positive integer | `8` |
@@ -825,6 +817,7 @@ The cinematic example deliberately stacks several `[inline]` effects grain, vign
 - Fast motion can cause ghosting on some temporal modes; the automatic `convergent_detail_recovery` stabilizer includes a motion gate that softens history influence on large per-pixel changes to reduce it.
 - Combining a temporal mode with a hardware sim makes the history texture capture the post-sim image, which the next frame reads back through TAA; the result is stable but visually unusual.
 - Compute path requires `shaderStorageImageWriteWithoutFormat` and a swap format with `VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT`. Missing either silently falls back to fragment with a log line.
+- If postfx submission fails repeatedly on a swapchain (driver in a bad state, etc.), the layer disables itself on that swapchain after a few consecutive failures and logs a single line saying so. Recreating the swapchain (resize, fullscreen toggle) re enables postfx; restarting the game also clears the state. This prevents silent TDR loops at the cost of postfx silently stopping until the swapchain is rebuilt check `BONES_LOG=warn` (or `info`) if effects unexpectedly disappear.
 
 The effect order is fixed and cannot be changed at runtime.
 

@@ -27,7 +27,9 @@ use super::device::query_format_storage_supported;
 use super::device::VkDevState;
 use super::instance::insts_get;
 use super::memory::create_compute_output_image;
+use super::memory::create_compute_output_image_concurrent;
 use super::memory::create_offscreen_image;
+use super::memory::create_offscreen_image_concurrent;
 use super::pipeline::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -49,6 +51,7 @@ pub(crate) struct PostFxResources {
     pub(crate) mode: PostFxMode,
     pub(crate) use_push_desc: bool,
     pub(crate) submit_family: u32,
+    pub(crate) dispatch_family: u32,
     pub(crate) needs_history: bool,
     pub(crate) render_pass: vk::RenderPass,
     pub(crate) pipeline_layout: vk::PipelineLayout,
@@ -70,6 +73,7 @@ pub(crate) struct PostFxResources {
     pub(crate) tex_upscaled_view: vk::ImageView,
     pub(crate) history_init: bool,
     pub(crate) submit_res: Option<VkSubmitResources>,
+    pub(crate) dispatch_res: Option<VkSubmitResources>,
     pub(crate) gen: i32,
     pub(crate) sample_format: vk::Format,
     pub(crate) compute_x: u32,
@@ -90,6 +94,8 @@ pub(crate) struct VkSwapState {
     pub(crate) res_scale: f32,
     pub(crate) mutable_format: bool,
     pub(crate) fx: Option<PostFxResources>,
+    pub(crate) submit_failures: u32,
+    pub(crate) disabled: bool,
 }
 
 static SWAP_FX: Mutex<Option<HashMap<u64, VkSwapState>>> = Mutex::new(None);
@@ -145,6 +151,29 @@ where
         .lock()
         .ok()
         .and_then(|mut g| g.as_mut().and_then(|m| m.get_mut(&sc).map(f)))
+}
+
+pub(crate) const SUBMIT_FAILURE_LIMIT: u32 = 4;
+
+pub(crate) fn swap_record_failure(sc: u64) -> bool {
+    swap_fx_lock_mut(sc, |st| {
+        st.submit_failures = st.submit_failures.saturating_add(1);
+        match st.submit_failures >= SUBMIT_FAILURE_LIMIT && !st.disabled {
+            true => { st.disabled = true; true }
+            false => false,
+        }
+    })
+    .unwrap_or(false)
+}
+
+pub(crate) fn swap_record_success(sc: u64) {
+    let _ = swap_fx_lock_mut(sc, |st| {
+        st.submit_failures = 0;
+    });
+}
+
+pub(crate) fn swap_is_disabled(sc: u64) -> bool {
+    swap_fx_lock_mut(sc, |st| st.disabled).unwrap_or(false)
 }
 
 fn fmt_unorm(format: vk::Format) -> vk::Format {
@@ -496,6 +525,7 @@ fn finalize_fx(
     needs_history: bool,
     use_push_desc: bool,
     submit_family: u32,
+    dispatch_family: u32,
 ) -> PostFxResources {
     let (can_blit, filter) = match insts_get(b.dev.instance_handle) {
         Some(inst) => {
@@ -519,6 +549,7 @@ fn finalize_fx(
         mode: b.mode,
         use_push_desc,
         submit_family,
+        dispatch_family,
         needs_history,
         render_pass: b.render_pass,
         pipeline_layout: b.pipeline_layout,
@@ -540,6 +571,7 @@ fn finalize_fx(
         tex_upscaled_view: b.tex_upscaled_view,
         history_init: false,
         submit_res: None,
+        dispatch_res: None,
         gen: GENERATION.load(Ordering::Relaxed),
         sample_format,
         compute_x: wg_x,
@@ -564,12 +596,63 @@ fn spv_or_fail(spv: Vec<u32>, label: &str) -> Result<Vec<u32>, ()> {
     }
 }
 
-fn pick_submit_family(dev: &VkDevState, mode: PostFxMode, present_family: u32, extent: vk::Extent2D, fx_extent: vk::Extent2D) -> u32 {
-    let is_native = extent.width == fx_extent.width && extent.height == fx_extent.height;
-    match (mode, dev.caps.async_compute_family, is_native) {
-        (PostFxMode::Compute, Some(f), true) => f,
-        (_, _, _) => present_family,
+fn pick_submit_family(_dev: &VkDevState, _mode: PostFxMode, present_family: u32, _extent: vk::Extent2D, _fx_extent: vk::Extent2D) -> u32 {
+    present_family
+}
+
+fn pick_dispatch_family(dev: &VkDevState, mode: PostFxMode, present_family: u32) -> u32 {
+    match (mode, dev.caps.async_compute_family) {
+        (PostFxMode::Compute, Some(f)) => f,
+        (_, _) => present_family,
     }
+}
+
+fn internal_image_families(submit_family: u32, dispatch_family: u32) -> Vec<u32> {
+    match submit_family == dispatch_family {
+        true => Vec::new(),
+        false => vec![submit_family, dispatch_family],
+    }
+}
+
+fn create_compute_output_for_split(
+    dev: &VkDevState,
+    extent: vk::Extent2D,
+    format: vk::Format,
+    families: &[u32],
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    match families.is_empty() {
+        true => create_compute_output_image(dev, extent, format),
+        false => create_compute_output_image_concurrent(dev, extent, format, families),
+    }
+}
+
+fn create_offscreen_for_split(
+    dev: &VkDevState,
+    extent: vk::Extent2D,
+    format: vk::Format,
+    families: &[u32],
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), ()> {
+    match families.is_empty() {
+        true => create_offscreen_image(dev, extent, format),
+        false => create_offscreen_image_concurrent(dev, extent, format, families),
+    }
+}
+
+fn format_supports_blit_pair(dev: &VkDevState, format: vk::Format) -> bool {
+    match insts_get(dev.instance_handle) {
+        Some(inst) => {
+            let props = unsafe { inst.instance.get_physical_device_format_properties(dev.phys, format) };
+            props.optimal_tiling_features.contains(vk::FormatFeatureFlags::BLIT_SRC)
+                && props.optimal_tiling_features.contains(vk::FormatFeatureFlags::BLIT_DST)
+        }
+        None => false,
+    }
+}
+
+fn need_upscaled_image_for_extent(_dev: &VkDevState, st: &VkSwapState) -> bool {
+    let extent_matches = st.extent.width == st.fx_extent.width && st.extent.height == st.fx_extent.height;
+    let is_srgb = fmt_unorm(st.image_format) != st.image_format;
+    !extent_matches && is_srgb
 }
 
 fn build_fx_compute(
@@ -578,14 +661,16 @@ fn build_fx_compute(
     needs_history: bool,
     use_push_desc: bool,
     submit_family: u32,
+    dispatch_family: u32,
 ) -> Result<PostFxResources, ()> {
     let spv = spv_or_fail(current_comp_spv(), "compute")?;
     let (wg_x, wg_y) = current_wg();
     let fx_extent = st.fx_extent;
     let format = st.view_format;
+    let families = internal_image_families(submit_family, dispatch_family);
     let mut b = new_fx_builder(dev, PostFxMode::Compute);
 
-    let (to_img, to_mem, to_view) = create_compute_output_image(dev, fx_extent, format)?;
+    let (to_img, to_mem, to_view) = create_compute_output_for_split(dev, fx_extent, format, &families)?;
     b.tex_output = to_img;
     b.tex_output_mem = to_mem;
     b.tex_output_view = to_view;
@@ -595,14 +680,15 @@ fn build_fx_compute(
     b.pipeline = create_compute_pipeline(dev, b.pipeline_layout, &spv)?;
     b.sampler = create_sampler(dev)?;
 
-    let (th_img, th_mem, th_view) = create_offscreen_image(dev, fx_extent, format)?;
+    let (th_img, th_mem, th_view) = create_offscreen_for_split(dev, fx_extent, format, &families)?;
     b.tex_history = th_img;
     b.tex_history_mem = th_mem;
     b.tex_history_view = th_view;
 
-    let (up_img, up_mem, up_view) = match st.extent.width == fx_extent.width && st.extent.height == fx_extent.height {
-        true => (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
-        false => create_offscreen_image(dev, st.extent, format)?,
+    let needs_upscaled = need_upscaled_image_for_extent(dev, st);
+    let (up_img, up_mem, up_view) = match needs_upscaled {
+        false => (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
+        true => create_offscreen_for_split(dev, st.extent, fmt_unorm(st.image_format), &families)?,
     };
     b.tex_upscaled = up_img;
     b.tex_upscaled_mem = up_mem;
@@ -621,7 +707,39 @@ fn build_fx_compute(
         true => (),
     }
 
-    Ok(finalize_fx(b, st.view_format, wg_x, wg_y, needs_history, use_push_desc, submit_family))
+    Ok(finalize_fx(b, st.view_format, wg_x, wg_y, needs_history, use_push_desc, submit_family, dispatch_family))
+}
+
+fn build_fragment_pipeline_for_mode(
+    dev: &VkDevState,
+    layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+    extent: vk::Extent2D,
+    spv: &[u32],
+    format: vk::Format,
+    use_dynren: bool,
+) -> Result<vk::Pipeline, ()> {
+    match use_dynren {
+        true => create_pipeline_dynren(dev, layout, extent, spv, format),
+        false => create_pipeline(dev, layout, render_pass, extent, spv),
+    }
+}
+
+fn build_fragment_render_target(
+    dev: &VkDevState,
+    format: vk::Format,
+    to_view: vk::ImageView,
+    fx_extent: vk::Extent2D,
+    use_dynren: bool,
+) -> Result<(vk::RenderPass, vk::Framebuffer), ()> {
+    match use_dynren {
+        true => Ok((vk::RenderPass::null(), vk::Framebuffer::null())),
+        false => {
+            let rp = create_render_pass(dev, format)?;
+            let fb = create_framebuffer(dev, rp, to_view, fx_extent)?;
+            Ok((rp, fb))
+        }
+    }
 }
 
 fn build_fx_fragment(
@@ -634,6 +752,7 @@ fn build_fx_fragment(
     let spv = spv_or_fail(current_frag_spv(), "fragment")?;
     let fx_extent = st.fx_extent;
     let format = st.view_format;
+    let use_dynren = dev.caps.dynren && dev.dynren_fp.is_some();
     let mut b = new_fx_builder(dev, PostFxMode::Fragment);
 
     let (to_img, to_mem, to_view) = create_offscreen_image(dev, fx_extent, format)?;
@@ -641,11 +760,12 @@ fn build_fx_fragment(
     b.tex_output_mem = to_mem;
     b.tex_output_view = to_view;
 
-    b.render_pass = create_render_pass(dev, format)?;
-    b.framebuffer = create_framebuffer(dev, b.render_pass, to_view, fx_extent)?;
+    let (rp, fb) = build_fragment_render_target(dev, format, to_view, fx_extent, use_dynren)?;
+    b.render_pass = rp;
+    b.framebuffer = fb;
     b.desc_layout = create_desc_layout_fragment(dev, use_push_desc)?;
     b.pipeline_layout = create_pipeline_layout(dev, b.desc_layout, vk::ShaderStageFlags::FRAGMENT)?;
-    b.pipeline = create_pipeline(dev, b.pipeline_layout, b.render_pass, fx_extent, &spv)?;
+    b.pipeline = build_fragment_pipeline_for_mode(dev, b.pipeline_layout, b.render_pass, fx_extent, &spv, format, use_dynren)?;
     b.sampler = create_sampler(dev)?;
 
     let (th_img, th_mem, th_view) = create_offscreen_image(dev, fx_extent, format)?;
@@ -653,9 +773,9 @@ fn build_fx_fragment(
     b.tex_history_mem = th_mem;
     b.tex_history_view = th_view;
 
-    let (up_img, up_mem, up_view) = match st.extent.width == fx_extent.width && st.extent.height == fx_extent.height {
-        true => (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
-        false => create_offscreen_image(dev, st.extent, format)?,
+    let (up_img, up_mem, up_view) = match need_upscaled_image_for_extent(dev, st) {
+        false => (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
+        true => create_offscreen_image(dev, st.extent, fmt_unorm(st.image_format))?,
     };
     b.tex_upscaled = up_img;
     b.tex_upscaled_mem = up_mem;
@@ -674,7 +794,7 @@ fn build_fx_fragment(
         true => (),
     }
 
-    Ok(finalize_fx(b, st.view_format, COMPUTE_X_DEFAULT, COMPUTE_Y_DEFAULT, needs_history, use_push_desc, submit_family))
+    Ok(finalize_fx(b, st.view_format, COMPUTE_X_DEFAULT, COMPUTE_Y_DEFAULT, needs_history, use_push_desc, submit_family, submit_family))
 }
 
 fn compute_format_usable(dev: &VkDevState, format: vk::Format) -> bool {
@@ -705,8 +825,9 @@ fn build_fx_resources(dev: &VkDevState, st: &VkSwapState, present_family: u32) -
     let needs_history = temporal_enabled(&s, &REGISTRY);
     let use_push_desc = dev.caps.pushdesc && dev.push_desc_fp.is_some();
     let submit_family = pick_submit_family(dev, mode, present_family, st.extent, st.fx_extent);
+    let dispatch_family = pick_dispatch_family(dev, mode, present_family);
     match mode {
-        PostFxMode::Compute => build_fx_compute(dev, st, needs_history, use_push_desc, submit_family),
+        PostFxMode::Compute => build_fx_compute(dev, st, needs_history, use_push_desc, submit_family, dispatch_family),
         PostFxMode::Fragment => build_fx_fragment(dev, st, needs_history, use_push_desc, submit_family),
     }
 }
@@ -749,6 +870,18 @@ fn call_wait_all_fences(dev: &VkDevState, fences: &[vk::Fence]) {
     }
 }
 
+fn rebuild_fragment_pipeline(
+    dev: &VkDevState,
+    fx: &PostFxResources,
+    fx_extent: vk::Extent2D,
+) -> Result<vk::Pipeline, ()> {
+    let use_dynren = dev.caps.dynren && dev.dynren_fp.is_some() && fx.render_pass == vk::RenderPass::null();
+    match use_dynren {
+        true => create_pipeline_dynren(dev, fx.pipeline_layout, fx_extent, &current_frag_spv(), fx.sample_format),
+        false => create_pipeline(dev, fx.pipeline_layout, fx.render_pass, fx_extent, &current_frag_spv()),
+    }
+}
+
 fn try_rebuild_pipeline(
     dev: &VkDevState,
     fx: &PostFxResources,
@@ -760,7 +893,7 @@ fn try_rebuild_pipeline(
     }
     match fx.mode {
         PostFxMode::Compute => create_compute_pipeline(dev, fx.pipeline_layout, &current_comp_spv()),
-        PostFxMode::Fragment => create_pipeline(dev, fx.pipeline_layout, fx.render_pass, fx_extent, &current_frag_spv()),
+        PostFxMode::Fragment => rebuild_fragment_pipeline(dev, fx, fx_extent),
     }
 }
 
@@ -794,7 +927,18 @@ fn spv_ready_for_mode(mode: PostFxMode) -> bool {
     }
 }
 
-pub(crate) fn check_rebuild_pipeline(dev: &VkDevState, st: &mut VkSwapState) {
+fn apply_full_rebuild(dev: &VkDevState, st: &mut VkSwapState, want_scale: f32) {
+    st.res_scale = want_scale;
+    st.fx_extent = scale_extent(st.extent, want_scale);
+    let fx_opt = st.fx.take();
+    match fx_opt {
+        Some(mut fx) => destroy_fx_resources(dev, &mut fx),
+        None => (),
+    }
+    log_at(LogLevel::Info, "hot reload: full postfx resource rebuild triggered");
+}
+
+fn check_pipeline_only(dev: &VkDevState, st: &mut VkSwapState) {
     let fx_extent = st.fx_extent;
     let gen = GENERATION.load(Ordering::Relaxed);
     match st.fx.as_mut() {
@@ -803,6 +947,21 @@ pub(crate) fn check_rebuild_pipeline(dev: &VkDevState, st: &mut VkSwapState) {
             false => (),
         },
         None => (),
+    }
+}
+
+pub(crate) fn check_rebuild_pipeline(dev: &VkDevState, st: &mut VkSwapState) {
+    let s = ensure_settings();
+    let want_mode = choose_mode(dev, &s, st.view_format);
+    let want_scale = s.res_scale;
+    let want_history = temporal_enabled(&s, &REGISTRY);
+    let needs_full = st.res_scale != want_scale
+        || st.fx.as_ref().map(|fx| fx.mode) != Some(want_mode)
+        || st.fx.as_ref().map(|fx| fx.needs_history) != Some(want_history);
+
+    match needs_full {
+        true => apply_full_rebuild(dev, st, want_scale),
+        false => check_pipeline_only(dev, st),
     }
 }
 
@@ -845,13 +1004,40 @@ fn submit_res_needs_replacement(cur: &Option<VkSubmitResources>, family: u32) ->
     }
 }
 
+fn ensure_dispatch_resources(
+    dev: &VkDevState,
+    fx: &mut PostFxResources,
+    image_count: usize,
+) -> bool {
+    let split_active = fx.dispatch_family != fx.submit_family;
+    match split_active {
+        false => {
+            fx.dispatch_res.take().into_iter().for_each(|r| destroy_submit_resources(dev, r));
+            true
+        }
+        true => match submit_res_needs_replacement(&fx.dispatch_res, fx.dispatch_family) {
+            false => true,
+            true => {
+                fx.dispatch_res.take().into_iter().for_each(|r| destroy_submit_resources(dev, r));
+                match create_submit_resources(dev, fx.dispatch_family, image_count) {
+                    Ok(r) => { fx.dispatch_res = Some(r); true }
+                    Err(()) => {
+                        log_at(LogLevel::Error, "dispatch resource alloc failed for async family");
+                        false
+                    }
+                }
+            }
+        },
+    }
+}
+
 pub(crate) fn ensure_submit_resources(
     dev: &VkDevState,
     fx: &mut PostFxResources,
     family: u32,
     image_count: usize,
 ) -> bool {
-    match submit_res_needs_replacement(&fx.submit_res, family) {
+    let primary_ok = match submit_res_needs_replacement(&fx.submit_res, family) {
         true => {
             fx.submit_res.take().into_iter().for_each(|r| destroy_submit_resources(dev, r));
             match create_submit_resources(dev, family, image_count) {
@@ -863,7 +1049,9 @@ pub(crate) fn ensure_submit_resources(
             }
         }
         false => true,
-    }
+    };
+    let dispatch_ok = ensure_dispatch_resources(dev, fx, image_count);
+    primary_ok && dispatch_ok
 }
 
 fn destroy_submit_resources(dev: &VkDevState, r: VkSubmitResources) {
@@ -877,6 +1065,10 @@ fn destroy_submit_resources(dev: &VkDevState, r: VkSubmitResources) {
 
 fn destroy_fx_resources(dev: &VkDevState, fx: &mut PostFxResources) {
     fx.submit_res
+        .take()
+        .into_iter()
+        .for_each(|r| destroy_submit_resources(dev, r));
+    fx.dispatch_res
         .take()
         .into_iter()
         .for_each(|r| destroy_submit_resources(dev, r));
@@ -1044,6 +1236,8 @@ fn register_swap_state(
                 res_scale,
                 mutable_format: attempt.mutable,
                 fx: None,
+                submit_failures: 0,
+                disabled: false,
             });
             log_at(LogLevel::Info, "swapchain registered (postfx lazily built)");
         }

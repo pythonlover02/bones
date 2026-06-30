@@ -8,25 +8,17 @@ use crate::consts::ENV_CONFIG_NAME;
 use crate::consts::ENV_LOG;
 use crate::consts::ENV_OPT_ASYNC_COMPUTE;
 use crate::consts::ENV_OPT_DYNREN;
-use crate::consts::ENV_OPT_FP16;
 use crate::consts::ENV_OPT_PUSHDESC;
-use crate::consts::ENV_OPT_SUBGROUP;
-use crate::consts::ENV_OPT_SUBGROUP_EXT_TYPES;
-use crate::consts::ENV_OPT_SUBGROUP_UNIFORM_FLOW;
 use crate::consts::ENV_OPT_SYNC2;
 use crate::consts::ENV_RES_SCALE;
 use crate::consts::RES_SCALE_MIN;
 
-pub(crate) const ENV_BYPASS_KEYS: [&str; 13] = [
+pub(crate) const ENV_BYPASS_KEYS: [&str; 9] = [
     ENV_CONFIG,
     ENV_RES_SCALE,
-    ENV_OPT_FP16,
     ENV_OPT_DYNREN,
     ENV_OPT_PUSHDESC,
-    ENV_OPT_SUBGROUP,
     ENV_OPT_SYNC2,
-    ENV_OPT_SUBGROUP_EXT_TYPES,
-    ENV_OPT_SUBGROUP_UNIFORM_FLOW,
     ENV_OPT_ASYNC_COMPUTE,
     ENV_COMPUTE,
     ENV_COMPUTE_X,

@@ -3,6 +3,7 @@ use std::ffi::c_char;
 use std::ffi::c_void;
 use std::ffi::CString;
 use std::mem;
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use ash::vk;
@@ -12,13 +13,9 @@ use crate::config::ensure_settings;
 use crate::config::Settings;
 use crate::consts::REGISTRY;
 use crate::consts::EXT_DYN_RENDER;
-use crate::consts::EXT_FP16;
 use crate::consts::EXT_MUTABLE_FMT;
 use crate::consts::EXT_PUSH_DESC;
-use crate::consts::EXT_SUBGROUP_EXT_TYPES;
-use crate::consts::EXT_SUBGROUP_UNIFORM_FLOW;
 use crate::consts::EXT_SYNCHRONIZATION2;
-use crate::consts::SUBGROUP_LABEL;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
 use crate::shader::build_shaders;
@@ -28,7 +25,6 @@ use crate::shader::store_shaders;
 use super::instance::*;
 use super::layer::*;
 
-#[derive(Clone)]
 pub(crate) struct VkDevState {
     pub(crate) device: ash::Device,
     pub(crate) phys: vk::PhysicalDevice,
@@ -37,6 +33,7 @@ pub(crate) struct VkDevState {
     pub(crate) swap_fp: vk::KhrSwapchainFn,
     pub(crate) sync2_fp: Option<vk::KhrSynchronization2Fn>,
     pub(crate) push_desc_fp: Option<vk::KhrPushDescriptorFn>,
+    pub(crate) dynren_fp: Option<vk::KhrDynamicRenderingFn>,
     pub(crate) caps: DeviceCaps,
     pub(crate) app_queue_families: Vec<u32>,
     pub(crate) async_compute_queue: Option<vk::Queue>,
@@ -46,15 +43,11 @@ pub(crate) struct VkDevState {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct DeviceCaps {
-    pub(crate) fp16: bool,
     pub(crate) dynren: bool,
     pub(crate) pushdesc: bool,
-    pub(crate) subgroup: bool,
     pub(crate) mutable_fmt: bool,
     pub(crate) storage_image_write_without_fmt: bool,
     pub(crate) sync2: bool,
-    pub(crate) subgroup_ext_types: bool,
-    pub(crate) subgroup_uniform_flow: bool,
     pub(crate) async_compute_family: Option<u32>,
     pub(crate) max_wg_x: u32,
     pub(crate) max_wg_y: u32,
@@ -75,18 +68,15 @@ struct AugmentedDeviceCi {
     _ext_ptrs: Vec<*const c_char>,
     _queue_create_infos: Vec<vk::DeviceQueueCreateInfo>,
     _queue_priorities: Vec<f32>,
-    _fp16_feat: Box<vk::PhysicalDeviceShaderFloat16Int8FeaturesKHR>,
     _dynren_feat: Box<vk::PhysicalDeviceDynamicRenderingFeaturesKHR>,
     _sync2_feat: Box<vk::PhysicalDeviceSynchronization2FeaturesKHR>,
-    _subgroup_ext_types_feat: Box<vk::PhysicalDeviceShaderSubgroupExtendedTypesFeaturesKHR>,
-    _subgroup_uniform_flow_feat: Box<vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR>,
     _enabled_features: Box<vk::PhysicalDeviceFeatures>,
 }
 
-static DEVS: RwLock<Option<HashMap<u64, VkDevState>>> = RwLock::new(None);
+static DEVS: RwLock<Option<HashMap<u64, Arc<VkDevState>>>> = RwLock::new(None);
 static QUEUE_TO_DEV: RwLock<Option<HashMap<u64, QueueBinding>>> = RwLock::new(None);
 
-pub(crate) fn devs_get(h: u64) -> Option<VkDevState> {
+pub(crate) fn devs_get(h: u64) -> Option<Arc<VkDevState>> {
     DEVS.read()
         .ok()
         .and_then(|g| g.as_ref().and_then(|m| m.get(&h).cloned()))
@@ -101,13 +91,13 @@ pub(crate) fn devs_gdpa(h: u64) -> Option<vk::PFN_vkGetDeviceProcAddr> {
 pub(crate) fn devs_put(h: u64, v: VkDevState) {
     match DEVS.write() {
         Ok(mut g) => {
-            g.get_or_insert_with(HashMap::new).insert(h, v);
+            g.get_or_insert_with(HashMap::new).insert(h, Arc::new(v));
         }
         Err(_) => (),
     }
 }
 
-pub(crate) fn devs_del(h: u64) -> Option<VkDevState> {
+pub(crate) fn devs_del(h: u64) -> Option<Arc<VkDevState>> {
     DEVS.write()
         .ok()
         .and_then(|mut g| g.as_mut().and_then(|m| m.remove(&h)))
@@ -129,7 +119,7 @@ pub(crate) fn queue_dev_put(q: u64, b: QueueBinding) {
     }
 }
 
-pub(crate) fn queue_owner(queue: vk::Queue) -> Option<(VkDevState, u32)> {
+pub(crate) fn queue_owner(queue: vk::Queue) -> Option<(Arc<VkDevState>, u32)> {
     queue_dev_get(queue.as_raw())
         .and_then(|b| devs_get(b.device_raw).map(|d| (d, b.family)))
 }
@@ -150,26 +140,10 @@ fn ext_supported(list: &[String], name: &str) -> bool {
     list.iter().any(|s| s == name)
 }
 
-fn subgroup_size_minimum(props: &vk::PhysicalDeviceSubgroupProperties) -> bool {
-    props.subgroup_size >= 4
-        && props
-            .supported_stages
-            .contains(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE)
-}
-
-fn query_subgroup_and_limits(
-    inst: &VkInstState,
-    phys: vk::PhysicalDevice,
-) -> (bool, u32, u32, u32) {
-    let mut sg = vk::PhysicalDeviceSubgroupProperties::default();
-    let mut props2 = vk::PhysicalDeviceProperties2 {
-        p_next: &mut sg as *mut _ as *mut c_void,
-        ..Default::default()
-    };
-    unsafe { inst.instance.get_physical_device_properties2(phys, &mut props2) };
-    let l = props2.properties.limits;
+fn query_wg_limits(inst: &VkInstState, phys: vk::PhysicalDevice) -> (u32, u32, u32) {
+    let props = unsafe { inst.instance.get_physical_device_properties(phys) };
+    let l = props.limits;
     (
-        subgroup_size_minimum(&sg),
         l.max_compute_work_group_size[0],
         l.max_compute_work_group_size[1],
         l.max_compute_work_group_invocations,
@@ -179,18 +153,14 @@ fn query_subgroup_and_limits(
 fn query_extension_features(
     inst: &VkInstState,
     phys: vk::PhysicalDevice,
-) -> (bool, bool) {
+) -> bool {
     let mut dynren = vk::PhysicalDeviceDynamicRenderingFeaturesKHR::default();
-    let mut fp16 = vk::PhysicalDeviceShaderFloat16Int8FeaturesKHR {
+    let mut feats2 = vk::PhysicalDeviceFeatures2 {
         p_next: &mut dynren as *mut _ as *mut c_void,
         ..Default::default()
     };
-    let mut feats2 = vk::PhysicalDeviceFeatures2 {
-        p_next: &mut fp16 as *mut _ as *mut c_void,
-        ..Default::default()
-    };
     unsafe { inst.instance.get_physical_device_features2(phys, &mut feats2) };
-    (fp16.shader_float16 == vk::TRUE, dynren.dynamic_rendering == vk::TRUE)
+    dynren.dynamic_rendering == vk::TRUE
 }
 
 fn query_core_features(inst: &VkInstState, phys: vk::PhysicalDevice) -> vk::PhysicalDeviceFeatures {
@@ -317,26 +287,6 @@ fn query_sync2_feature(inst: &VkInstState, phys: vk::PhysicalDevice) -> bool {
     f.synchronization2 == vk::TRUE
 }
 
-fn query_subgroup_ext_types_feature(inst: &VkInstState, phys: vk::PhysicalDevice) -> bool {
-    let mut f = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeaturesKHR::default();
-    let mut f2 = vk::PhysicalDeviceFeatures2 {
-        p_next: &mut f as *mut _ as *mut c_void,
-        ..Default::default()
-    };
-    unsafe { inst.instance.get_physical_device_features2(phys, &mut f2) };
-    f.shader_subgroup_extended_types == vk::TRUE
-}
-
-fn query_subgroup_uniform_flow_feature(inst: &VkInstState, phys: vk::PhysicalDevice) -> bool {
-    let mut f = vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR::default();
-    let mut f2 = vk::PhysicalDeviceFeatures2 {
-        p_next: &mut f as *mut _ as *mut c_void,
-        ..Default::default()
-    };
-    unsafe { inst.instance.get_physical_device_features2(phys, &mut f2) };
-    f.shader_subgroup_uniform_control_flow == vk::TRUE
-}
-
 fn maybe_chain<T, F>(use_it: bool, head: *const c_void, feat: &mut T, set_next: F) -> *const c_void
 where
     F: FnOnce(&mut T, *mut c_void),
@@ -358,33 +308,24 @@ fn build_augmented(
 ) -> AugmentedDeviceCi {
     let original = unsafe { &*ci };
     let supported = supported_device_exts(inst, phys);
-    let (fp16_feat_ok, dynren_feat_ok) = query_extension_features(inst, phys);
+    let dynren_feat_ok = query_extension_features(inst, phys);
     let core = query_core_features(inst, phys);
-    let (sg_ok, max_wg_x, max_wg_y, max_wg_inv) = query_subgroup_and_limits(inst, phys);
+    let (max_wg_x, max_wg_y, max_wg_inv) = query_wg_limits(inst, phys);
     let sync2_feat_ok = query_sync2_feature(inst, phys);
-    let sg_ext_feat_ok = query_subgroup_ext_types_feature(inst, phys);
-    let sg_uniform_feat_ok = query_subgroup_uniform_flow_feature(inst, phys);
 
     let app_queue_families = extract_app_queue_families(original);
     let async_family_candidate = find_async_compute_family(inst, phys, &app_queue_families);
 
-    let fp16_avail = ext_supported(&supported, EXT_FP16) && fp16_feat_ok;
     let dynren_avail = ext_supported(&supported, EXT_DYN_RENDER) && dynren_feat_ok;
     let pushdesc_avail = ext_supported(&supported, EXT_PUSH_DESC);
     let mutable_avail = ext_supported(&supported, EXT_MUTABLE_FMT);
     let storage_write_avail = core.shader_storage_image_write_without_format == vk::TRUE;
     let sync2_avail = ext_supported(&supported, EXT_SYNCHRONIZATION2) && sync2_feat_ok;
-    let sg_ext_avail = ext_supported(&supported, EXT_SUBGROUP_EXT_TYPES) && sg_ext_feat_ok;
-    let sg_uniform_avail = ext_supported(&supported, EXT_SUBGROUP_UNIFORM_FLOW) && sg_uniform_feat_ok;
 
-    let use_fp16 = log_opt(s.opt_fp16, fp16_avail, "fp16", EXT_FP16);
     let use_dynren = log_opt(s.opt_dynren, dynren_avail, "dynamic_rendering", EXT_DYN_RENDER);
     let use_pushdesc = log_opt(s.opt_pushdesc, pushdesc_avail, "push_descriptors", EXT_PUSH_DESC);
-    let use_subgroup = log_opt(s.opt_subgroup, sg_ok, "subgroup_ops", SUBGROUP_LABEL);
     let use_storage_write = log_opt(s.compute, storage_write_avail, "compute_path", "shaderStorageImageWriteWithoutFormat");
     let use_sync2 = log_opt(s.opt_sync2, sync2_avail, "synchronization2", EXT_SYNCHRONIZATION2);
-    let use_sg_ext = log_opt(s.opt_subgroup_ext_types, sg_ext_avail, "subgroup_extended_types", EXT_SUBGROUP_EXT_TYPES);
-    let use_sg_uniform = log_opt(s.opt_subgroup_uniform_flow, sg_uniform_avail, "subgroup_uniform_control_flow", EXT_SUBGROUP_UNIFORM_FLOW);
     let use_async_compute = log_opt(
         s.opt_async_compute && s.compute,
         async_family_candidate.is_some() && use_storage_write,
@@ -394,20 +335,13 @@ fn build_augmented(
     let async_family = match use_async_compute { true => async_family_candidate, false => None };
 
     let mut exts = original_ext_cstrings(original);
-    add_if_chosen(use_fp16, EXT_FP16, &mut exts);
     add_if_chosen(use_dynren, EXT_DYN_RENDER, &mut exts);
     add_if_chosen(use_pushdesc, EXT_PUSH_DESC, &mut exts);
     add_if_chosen(mutable_avail, EXT_MUTABLE_FMT, &mut exts);
     add_if_chosen(use_sync2, EXT_SYNCHRONIZATION2, &mut exts);
-    add_if_chosen(use_sg_ext, EXT_SUBGROUP_EXT_TYPES, &mut exts);
-    add_if_chosen(use_sg_uniform, EXT_SUBGROUP_UNIFORM_FLOW, &mut exts);
 
     let ext_ptrs: Vec<*const c_char> = exts.iter().map(|c| c.as_ptr()).collect();
 
-    let mut fp16_feat = Box::new(vk::PhysicalDeviceShaderFloat16Int8FeaturesKHR {
-        shader_float16: vk::TRUE,
-        ..Default::default()
-    });
     let mut dynren_feat = Box::new(vk::PhysicalDeviceDynamicRenderingFeaturesKHR {
         dynamic_rendering: vk::TRUE,
         ..Default::default()
@@ -416,22 +350,11 @@ fn build_augmented(
         synchronization2: vk::TRUE,
         ..Default::default()
     });
-    let mut sg_ext_feat = Box::new(vk::PhysicalDeviceShaderSubgroupExtendedTypesFeaturesKHR {
-        shader_subgroup_extended_types: vk::TRUE,
-        ..Default::default()
-    });
-    let mut sg_uniform_feat = Box::new(vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR {
-        shader_subgroup_uniform_control_flow: vk::TRUE,
-        ..Default::default()
-    });
     let enabled_features = Box::new(merged_features(original_features_ptr(original), use_storage_write));
 
     let mut head = original.p_next;
     head = maybe_chain(use_dynren, head, dynren_feat.as_mut(), |f, n| f.p_next = n);
-    head = maybe_chain(use_fp16, head, fp16_feat.as_mut(), |f, n| f.p_next = n);
     head = maybe_chain(use_sync2, head, sync2_feat.as_mut(), |f, n| f.p_next = n);
-    head = maybe_chain(use_sg_ext, head, sg_ext_feat.as_mut(), |f, n| f.p_next = n);
-    head = maybe_chain(use_sg_uniform, head, sg_uniform_feat.as_mut(), |f, n| f.p_next = n);
 
     let priorities = vec![1.0f32];
     let extra_q = async_family.map(|f| extra_queue_ci(f, priorities.as_ptr()));
@@ -452,15 +375,11 @@ fn build_augmented(
     AugmentedDeviceCi {
         ci: new_ci,
         caps: DeviceCaps {
-            fp16: use_fp16,
             dynren: use_dynren,
             pushdesc: use_pushdesc,
-            subgroup: use_subgroup,
             mutable_fmt: mutable_avail,
             storage_image_write_without_fmt: use_storage_write,
             sync2: use_sync2,
-            subgroup_ext_types: use_sg_ext,
-            subgroup_uniform_flow: use_sg_uniform,
             async_compute_family: async_family,
             max_wg_x,
             max_wg_y,
@@ -471,11 +390,8 @@ fn build_augmented(
         _ext_ptrs: ext_ptrs,
         _queue_create_infos: queue_infos,
         _queue_priorities: priorities,
-        _fp16_feat: fp16_feat,
         _dynren_feat: dynren_feat,
         _sync2_feat: sync2_feat,
-        _subgroup_ext_types_feat: sg_ext_feat,
-        _subgroup_uniform_flow_feat: sg_uniform_feat,
         _enabled_features: enabled_features,
     }
 }
@@ -492,6 +408,15 @@ fn load_sync2_fp(gdpa: vk::PFN_vkGetDeviceProcAddr, handle: vk::Device, enabled:
 fn load_push_desc_fp(gdpa: vk::PFN_vkGetDeviceProcAddr, handle: vk::Device, enabled: bool) -> Option<vk::KhrPushDescriptorFn> {
     match enabled {
         true => Some(vk::KhrPushDescriptorFn::load(|name| unsafe {
+            mem::transmute(gdpa(handle, name.as_ptr()))
+        })),
+        false => None,
+    }
+}
+
+fn load_dynren_fp(gdpa: vk::PFN_vkGetDeviceProcAddr, handle: vk::Device, enabled: bool) -> Option<vk::KhrDynamicRenderingFn> {
+    match enabled {
+        true => Some(vk::KhrDynamicRenderingFn::load(|name| unsafe {
             mem::transmute(gdpa(handle, name.as_ptr()))
         })),
         false => None,
@@ -519,6 +444,7 @@ fn register_device(
     });
     let sync2_fp = load_sync2_fp(gdpa, handle, caps.sync2);
     let push_desc_fp = load_push_desc_fp(gdpa, handle, caps.pushdesc);
+    let dynren_fp = load_dynren_fp(gdpa, handle, caps.dynren);
     let async_compute_queue = fetch_async_queue(&device, caps.async_compute_family);
     let mem_props = unsafe { inst.instance.get_physical_device_memory_properties(phys) };
     devs_put(
@@ -531,6 +457,7 @@ fn register_device(
             swap_fp,
             sync2_fp,
             push_desc_fp,
+            dynren_fp,
             caps,
             app_queue_families,
             async_compute_queue,
@@ -573,7 +500,7 @@ fn invoke_create_device(
 
 fn apply_caps_and_rebuild_shaders(s: &Settings, caps: &DeviceCaps) {
     set_wg_limits(caps.max_wg_x, caps.max_wg_y, caps.max_wg_invocations);
-    crate::shader::set_subgroup_caps(caps.subgroup_ext_types, caps.subgroup_uniform_flow);
+    let _ = crate::shader::compile_vert_spirv();
     let spv = build_shaders(s, &REGISTRY);
     store_shaders(spv);
 }

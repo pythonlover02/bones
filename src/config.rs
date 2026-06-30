@@ -15,26 +15,17 @@ use crate::consts::ENV_COMPUTE;
 use crate::consts::ENV_COMPUTE_X;
 use crate::consts::ENV_COMPUTE_Y;
 use crate::consts::ENV_OPT_DYNREN;
-use crate::consts::ENV_OPT_FP16;
 use crate::consts::ENV_OPT_PUSHDESC;
 use crate::consts::ENV_OPT_ASYNC_COMPUTE;
-use crate::consts::ENV_OPT_SUBGROUP_EXT_TYPES;
-use crate::consts::ENV_OPT_SUBGROUP_UNIFORM_FLOW;
 use crate::consts::ENV_OPT_SYNC2;
-use crate::consts::ENV_OPT_SUBGROUP;
 use crate::consts::GENERAL_BOOL_KEYS;
 use crate::consts::GENERAL_FLOAT_KEYS;
 use crate::consts::GENERAL_UINT_KEYS;
 use crate::consts::HEAD;
-use crate::consts::HOT_RELOAD_KEY;
 use crate::consts::OPT_DYNREN_KEY;
-use crate::consts::OPT_FP16_KEY;
 use crate::consts::OPT_PUSHDESC_KEY;
 use crate::consts::OPT_ASYNC_COMPUTE_KEY;
-use crate::consts::OPT_SUBGROUP_EXT_TYPES_KEY;
-use crate::consts::OPT_SUBGROUP_UNIFORM_FLOW_KEY;
 use crate::consts::OPT_SYNC2_KEY;
-use crate::consts::OPT_SUBGROUP_KEY;
 use crate::consts::REGISTRY;
 use crate::consts::RES_SCALE_DEFAULT;
 use crate::consts::RES_SCALE_KEY;
@@ -54,15 +45,10 @@ use crate::watch::setup_watch;
 #[derive(Clone)]
 pub(crate) struct Settings {
     pub(crate) effects: HashMap<String, bool>,
-    pub(crate) hot_reload: bool,
     pub(crate) res_scale: f32,
-    pub(crate) opt_fp16: bool,
     pub(crate) opt_dynren: bool,
     pub(crate) opt_pushdesc: bool,
-    pub(crate) opt_subgroup: bool,
     pub(crate) opt_sync2: bool,
-    pub(crate) opt_subgroup_ext_types: bool,
-    pub(crate) opt_subgroup_uniform_flow: bool,
     pub(crate) opt_async_compute: bool,
     pub(crate) compute: bool,
     pub(crate) compute_x: u32,
@@ -73,15 +59,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             effects: HashMap::new(),
-            hot_reload: true,
             res_scale: RES_SCALE_DEFAULT,
-            opt_fp16: true,
             opt_dynren: true,
             opt_pushdesc: true,
-            opt_subgroup: true,
             opt_sync2: true,
-            opt_subgroup_ext_types: true,
-            opt_subgroup_uniform_flow: true,
             opt_async_compute: true,
             compute: true,
             compute_x: COMPUTE_X_DEFAULT,
@@ -232,14 +213,9 @@ pub(crate) fn parse_settings(text: &str, reg: &[EffectDef]) -> Settings {
     };
     let effects = effects_of(&doc, reg);
     Settings {
-        hot_reload: parse_bool_opt(&effects, HOT_RELOAD_KEY, true),
-        opt_fp16: parse_bool_opt(&effects, OPT_FP16_KEY, true),
         opt_dynren: parse_bool_opt(&effects, OPT_DYNREN_KEY, true),
         opt_pushdesc: parse_bool_opt(&effects, OPT_PUSHDESC_KEY, true),
-        opt_subgroup: parse_bool_opt(&effects, OPT_SUBGROUP_KEY, true),
         opt_sync2: parse_bool_opt(&effects, OPT_SYNC2_KEY, true),
-        opt_subgroup_ext_types: parse_bool_opt(&effects, OPT_SUBGROUP_EXT_TYPES_KEY, true),
-        opt_subgroup_uniform_flow: parse_bool_opt(&effects, OPT_SUBGROUP_UNIFORM_FLOW_KEY, true),
         opt_async_compute: parse_bool_opt(&effects, OPT_ASYNC_COMPUTE_KEY, true),
         compute: parse_bool_opt(&effects, COMPUTE_KEY, true),
         compute_x: parse_general_uint(&doc, COMPUTE_X_KEY, COMPUTE_X_DEFAULT),
@@ -259,15 +235,10 @@ fn env_effects(reg: &[EffectDef]) -> HashMap<String, bool> {
 pub(crate) fn settings_from_env(reg: &[EffectDef]) -> Settings {
     Settings {
         effects: env_effects(reg),
-        hot_reload: false,
         res_scale: env_res_scale(RES_SCALE_DEFAULT),
-        opt_fp16: env_bool(ENV_OPT_FP16, true),
         opt_dynren: env_bool(ENV_OPT_DYNREN, true),
         opt_pushdesc: env_bool(ENV_OPT_PUSHDESC, true),
-        opt_subgroup: env_bool(ENV_OPT_SUBGROUP, true),
         opt_sync2: env_bool(ENV_OPT_SYNC2, true),
-        opt_subgroup_ext_types: env_bool(ENV_OPT_SUBGROUP_EXT_TYPES, true),
-        opt_subgroup_uniform_flow: env_bool(ENV_OPT_SUBGROUP_UNIFORM_FLOW, true),
         opt_async_compute: env_bool(ENV_OPT_ASYNC_COMPUTE, true),
         compute: env_bool(ENV_COMPUTE, true),
         compute_x: env_uint(ENV_COMPUTE_X, COMPUTE_X_DEFAULT),
@@ -338,7 +309,7 @@ pub(crate) fn load_settings() -> Settings {
     init_log_level();
     let s = resolve_settings(&REGISTRY);
     store_settings(s.clone());
-    setup_watch(&s);
+    setup_watch();
     log_at(LogLevel::Info, "settings loaded");
     s
 }

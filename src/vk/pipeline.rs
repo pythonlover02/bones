@@ -131,52 +131,72 @@ fn create_module_pair(dev: &VkDevState, vert_spv: &[u32], frag_spv: &[u32]) -> R
     }
 }
 
-pub(crate) fn create_pipeline(
+fn build_stage_array(vs: vk::ShaderModule, fs: vk::ShaderModule, entry: *const i8) -> [vk::PipelineShaderStageCreateInfo; 2] {
+    [
+        vk::PipelineShaderStageCreateInfo {
+            stage: vk::ShaderStageFlags::VERTEX, module: vs, p_name: entry,
+            ..Default::default()
+        },
+        vk::PipelineShaderStageCreateInfo {
+            stage: vk::ShaderStageFlags::FRAGMENT, module: fs, p_name: entry,
+            ..Default::default()
+        },
+    ]
+}
+
+fn build_pipeline_states(extent: vk::Extent2D) -> (
+    vk::PipelineVertexInputStateCreateInfo,
+    vk::PipelineInputAssemblyStateCreateInfo,
+    vk::Viewport,
+    vk::Rect2D,
+    vk::PipelineRasterizationStateCreateInfo,
+    vk::PipelineMultisampleStateCreateInfo,
+    vk::PipelineColorBlendAttachmentState,
+) {
+    (
+        vk::PipelineVertexInputStateCreateInfo { ..Default::default() },
+        vk::PipelineInputAssemblyStateCreateInfo {
+            topology: vk::PrimitiveTopology::TRIANGLE_LIST, ..Default::default()
+        },
+        vk::Viewport {
+            width: extent.width as f32, height: extent.height as f32, max_depth: 1.0, ..Default::default()
+        },
+        vk::Rect2D { extent, ..Default::default() },
+        vk::PipelineRasterizationStateCreateInfo {
+            polygon_mode: vk::PolygonMode::FILL, cull_mode: vk::CullModeFlags::NONE,
+            front_face: vk::FrontFace::COUNTER_CLOCKWISE, line_width: 1.0, ..Default::default()
+        },
+        vk::PipelineMultisampleStateCreateInfo {
+            rasterization_samples: vk::SampleCountFlags::TYPE_1, ..Default::default()
+        },
+        vk::PipelineColorBlendAttachmentState {
+            color_write_mask: vk::ColorComponentFlags::RGBA, ..Default::default()
+        },
+    )
+}
+
+fn create_graphics_pipeline_with_pnext(
     dev: &VkDevState,
     layout: vk::PipelineLayout,
     pass: vk::RenderPass,
     extent: vk::Extent2D,
     frag_spv: &[u32],
+    p_next: *const std::ffi::c_void,
 ) -> Result<vk::Pipeline, ()> {
     let vert_spv = compile_vert_spirv()?;
     let (vs, fs) = create_module_pair(dev, &vert_spv, frag_spv)?;
     let entry = CString::new("main").unwrap_or_default();
-    let stages = [
-        vk::PipelineShaderStageCreateInfo {
-            stage: vk::ShaderStageFlags::VERTEX, module: vs, p_name: entry.as_ptr(),
-            ..Default::default()
-        },
-        vk::PipelineShaderStageCreateInfo {
-            stage: vk::ShaderStageFlags::FRAGMENT, module: fs, p_name: entry.as_ptr(),
-            ..Default::default()
-        },
-    ];
-    let vi = vk::PipelineVertexInputStateCreateInfo { ..Default::default() };
-    let ia = vk::PipelineInputAssemblyStateCreateInfo {
-        topology: vk::PrimitiveTopology::TRIANGLE_LIST, ..Default::default()
-    };
-    let viewport = vk::Viewport {
-        width: extent.width as f32, height: extent.height as f32, max_depth: 1.0, ..Default::default()
-    };
-    let scissor = vk::Rect2D { extent, ..Default::default() };
+    let stages = build_stage_array(vs, fs, entry.as_ptr());
+    let (vi, ia, viewport, scissor, rs, ms, blend_attachment) = build_pipeline_states(extent);
     let vp = vk::PipelineViewportStateCreateInfo {
         viewport_count: 1, p_viewports: &viewport, scissor_count: 1, p_scissors: &scissor,
         ..Default::default()
-    };
-    let rs = vk::PipelineRasterizationStateCreateInfo {
-        polygon_mode: vk::PolygonMode::FILL, cull_mode: vk::CullModeFlags::NONE,
-        front_face: vk::FrontFace::COUNTER_CLOCKWISE, line_width: 1.0, ..Default::default()
-    };
-    let ms = vk::PipelineMultisampleStateCreateInfo {
-        rasterization_samples: vk::SampleCountFlags::TYPE_1, ..Default::default()
-    };
-    let blend_attachment = vk::PipelineColorBlendAttachmentState {
-        color_write_mask: vk::ColorComponentFlags::RGBA, ..Default::default()
     };
     let cb = vk::PipelineColorBlendStateCreateInfo {
         attachment_count: 1, p_attachments: &blend_attachment, ..Default::default()
     };
     let pci = vk::GraphicsPipelineCreateInfo {
+        p_next,
         stage_count: 2, p_stages: stages.as_ptr(),
         p_vertex_input_state: &vi, p_input_assembly_state: &ia, p_viewport_state: &vp,
         p_rasterization_state: &rs, p_multisample_state: &ms, p_color_blend_state: &cb,
@@ -185,6 +205,39 @@ pub(crate) fn create_pipeline(
     let r = unsafe { dev.device.create_graphics_pipelines(vk::PipelineCache::null(), &[pci], None) };
     destroy_module_pair(dev, vs, fs);
     r.map(|v| v[0]).map_err(|_| ())
+}
+
+pub(crate) fn create_pipeline(
+    dev: &VkDevState,
+    layout: vk::PipelineLayout,
+    pass: vk::RenderPass,
+    extent: vk::Extent2D,
+    frag_spv: &[u32],
+) -> Result<vk::Pipeline, ()> {
+    create_graphics_pipeline_with_pnext(dev, layout, pass, extent, frag_spv, std::ptr::null())
+}
+
+pub(crate) fn create_pipeline_dynren(
+    dev: &VkDevState,
+    layout: vk::PipelineLayout,
+    extent: vk::Extent2D,
+    frag_spv: &[u32],
+    color_format: vk::Format,
+) -> Result<vk::Pipeline, ()> {
+    let formats = [color_format];
+    let rendering_ci = vk::PipelineRenderingCreateInfoKHR {
+        color_attachment_count: 1,
+        p_color_attachment_formats: formats.as_ptr(),
+        ..Default::default()
+    };
+    create_graphics_pipeline_with_pnext(
+        dev,
+        layout,
+        vk::RenderPass::null(),
+        extent,
+        frag_spv,
+        &rendering_ci as *const _ as *const std::ffi::c_void,
+    )
 }
 
 pub(crate) fn create_compute_pipeline(

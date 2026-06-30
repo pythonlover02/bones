@@ -110,11 +110,8 @@ fn apply_reload(s: Settings, a: ShaderArtifacts, reg: &[EffectDef]) {
     log_at(LogLevel::Info, "hot reload applied");
 }
 
-pub(crate) fn setup_watch(s: &Settings) {
-    match s.hot_reload {
-        true => init_inotify(),
-        false => (),
-    }
+pub(crate) fn setup_watch() {
+    init_inotify();
 }
 
 pub(crate) fn maybe_reload() {

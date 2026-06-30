@@ -638,17 +638,6 @@ fn create_offscreen_for_split(
     }
 }
 
-fn format_supports_blit_pair(dev: &VkDevState, format: vk::Format) -> bool {
-    match insts_get(dev.instance_handle) {
-        Some(inst) => {
-            let props = unsafe { inst.instance.get_physical_device_format_properties(dev.phys, format) };
-            props.optimal_tiling_features.contains(vk::FormatFeatureFlags::BLIT_SRC)
-                && props.optimal_tiling_features.contains(vk::FormatFeatureFlags::BLIT_DST)
-        }
-        None => false,
-    }
-}
-
 fn need_upscaled_image_for_extent(_dev: &VkDevState, st: &VkSwapState) -> bool {
     let extent_matches = st.extent.width == st.fx_extent.width && st.extent.height == st.fx_extent.height;
     let is_srgb = fmt_unorm(st.image_format) != st.image_format;

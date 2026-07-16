@@ -182,7 +182,7 @@ unsafe extern "system" fn bones_EnumerateInstanceLayerProperties(
         false => {
             let mut p = vk::LayerProperties {
                 spec_version: vk::make_api_version(0, 1, 3, 0),
-                implementation_version: 3,
+                implementation_version: 4,
                 ..Default::default()
             };
             copy_cstr(&mut p.layer_name, LAYER_NAME);

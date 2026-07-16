@@ -15,6 +15,7 @@ pub(crate) const ENV_RES_SCALE: &str = "BONES_RESOLUTION_SCALE";
 pub(crate) const ENV_OPT_DYNREN: &str = "BONES_OPTIMIZE_DYNAMIC_RENDERING";
 pub(crate) const ENV_OPT_PUSHDESC: &str = "BONES_OPTIMIZE_PUSH_DESCRIPTORS";
 pub(crate) const ENV_OPT_SYNC2: &str = "BONES_OPTIMIZE_SYNC2";
+pub(crate) const ENV_OPT_MUTABLE_FMT: &str = "BONES_OPTIMIZE_MUTABLE_FORMAT";
 pub(crate) const ENV_OPT_ASYNC_COMPUTE: &str = "BONES_OPTIMIZE_ASYNC_COMPUTE";
 pub(crate) const ENV_COMPUTE: &str = "BONES_COMPUTE";
 pub(crate) const ENV_COMPUTE_X: &str = "BONES_COMPUTE_X";
@@ -33,6 +34,7 @@ pub(crate) const RES_SCALE_KEY: &str = "resolution_scale";
 pub(crate) const OPT_DYNREN_KEY: &str = "optimize_dynamic_rendering";
 pub(crate) const OPT_PUSHDESC_KEY: &str = "optimize_push_descriptors";
 pub(crate) const OPT_SYNC2_KEY: &str = "optimize_sync2";
+pub(crate) const OPT_MUTABLE_FMT_KEY: &str = "optimize_mutable_format";
 pub(crate) const OPT_ASYNC_COMPUTE_KEY: &str = "optimize_async_compute";
 pub(crate) const COMPUTE_KEY: &str = "compute";
 pub(crate) const COMPUTE_X_KEY: &str = "compute_x";
@@ -48,10 +50,11 @@ pub(crate) const EXT_PUSH_DESC: &str = "VK_KHR_push_descriptor";
 pub(crate) const EXT_MUTABLE_FMT: &str = "VK_KHR_swapchain_mutable_format";
 pub(crate) const EXT_SYNCHRONIZATION2: &str = "VK_KHR_synchronization2";
 
-pub(crate) const GENERAL_BOOL_KEYS: [&str; 5] = [
+pub(crate) const GENERAL_BOOL_KEYS: [&str; 6] = [
     OPT_DYNREN_KEY,
     OPT_PUSHDESC_KEY,
     OPT_SYNC2_KEY,
+    OPT_MUTABLE_FMT_KEY,
     OPT_ASYNC_COMPUTE_KEY,
     COMPUTE_KEY,
 ];
@@ -99,9 +102,9 @@ pub(crate) const HEAD: &str = r#"##bones default profile
 # chain. 1.0 = render at native resolution. 0.5 = render the entire
 # post-fx pipeline at half resolution then bilinear upscale to native at
 # the final blit. lower value gives big perf wins for expensive effect
-# stacks at the cost of softer image. minimum 0.05. takes effect at
-# swapchain creation; changing via hot reload requires the game to
-# re-create the swapchain (resize the window, toggle fullscreen, etc).
+# stacks at the cost of softer image. minimum 0.05. hot-reloadable:
+# changing it while the game runs triggers a full post-fx resource
+# rebuild on the next present, no swapchain recreation needed.
 # env: BONES_RESOLUTION_SCALE
 resolution_scale = 1.0
 
@@ -122,6 +125,15 @@ optimize_push_descriptors = true
 # barrier pairs into single calls. logged when not available. on by
 # default. env: BONES_OPTIMIZE_SYNC2
 optimize_sync2 = true
+
+# optimize_mutable_format to enable VK_KHR_swapchain_mutable_format at
+# device creation when supported. lets the layer view sRGB swap image
+# as their UNORM equivalent so the shader sample the swap image
+# directly with no input copy. device-level: cannot be hot-reloaded,
+# require a game restart. turn off if you see gamma shift or
+# corruption on a specific driver. logged when not available. on by
+# default. env: BONES_OPTIMIZE_MUTABLE_FORMAT
+optimize_mutable_format = true
 
 # optimize_async_compute to submit post-fx work on a dedicated async
 # compute queue family when one is available. lets the post-fx

@@ -8,17 +8,19 @@ use crate::consts::ENV_CONFIG_NAME;
 use crate::consts::ENV_LOG;
 use crate::consts::ENV_OPT_ASYNC_COMPUTE;
 use crate::consts::ENV_OPT_DYNREN;
+use crate::consts::ENV_OPT_MUTABLE_FMT;
 use crate::consts::ENV_OPT_PUSHDESC;
 use crate::consts::ENV_OPT_SYNC2;
 use crate::consts::ENV_RES_SCALE;
 use crate::consts::RES_SCALE_MIN;
 
-pub(crate) const ENV_BYPASS_KEYS: [&str; 9] = [
+pub(crate) const ENV_BYPASS_KEYS: [&str; 10] = [
     ENV_CONFIG,
     ENV_RES_SCALE,
     ENV_OPT_DYNREN,
     ENV_OPT_PUSHDESC,
     ENV_OPT_SYNC2,
+    ENV_OPT_MUTABLE_FMT,
     ENV_OPT_ASYNC_COMPUTE,
     ENV_COMPUTE,
     ENV_COMPUTE_X,
@@ -46,7 +48,7 @@ fn read_var(key: &str) -> Option<String> {
 }
 
 fn key_is_active(key: &str) -> bool {
-    read_var(key).is_some()
+    env::var(key).is_ok()
 }
 
 pub(crate) fn env_bypass_active() -> bool {

@@ -324,6 +324,7 @@ fn build_augmented(
     let dynren_avail = ext_supported(&supported, EXT_DYN_RENDER) && dynren_feat_ok;
     let pushdesc_avail = ext_supported(&supported, EXT_PUSH_DESC);
     let mutable_avail = ext_supported(&supported, EXT_MUTABLE_FMT);
+    let use_mutable = log_opt(s.opt_mutable_fmt, mutable_avail, "mutable_format", EXT_MUTABLE_FMT);
     let storage_write_avail = core.shader_storage_image_write_without_format == vk::TRUE;
     let sync2_avail = ext_supported(&supported, EXT_SYNCHRONIZATION2) && sync2_feat_ok;
 
@@ -342,7 +343,7 @@ fn build_augmented(
     let mut exts = original_ext_cstrings(original);
     add_if_chosen(use_dynren, EXT_DYN_RENDER, &mut exts);
     add_if_chosen(use_pushdesc, EXT_PUSH_DESC, &mut exts);
-    add_if_chosen(mutable_avail, EXT_MUTABLE_FMT, &mut exts);
+    add_if_chosen(use_mutable, EXT_MUTABLE_FMT, &mut exts);
     add_if_chosen(use_sync2, EXT_SYNCHRONIZATION2, &mut exts);
 
     let ext_ptrs: Vec<*const c_char> = exts.iter().map(|c| c.as_ptr()).collect();
@@ -382,7 +383,7 @@ fn build_augmented(
         caps: DeviceCaps {
             dynren: use_dynren,
             pushdesc: use_pushdesc,
-            mutable_fmt: mutable_avail,
+            mutable_fmt: use_mutable,
             storage_image_write_without_fmt: use_storage_write,
             sync2: use_sync2,
             async_compute_family: async_family,

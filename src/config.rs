@@ -15,6 +15,7 @@ use crate::consts::ENV_COMPUTE;
 use crate::consts::ENV_COMPUTE_X;
 use crate::consts::ENV_COMPUTE_Y;
 use crate::consts::ENV_OPT_DYNREN;
+use crate::consts::ENV_OPT_MUTABLE_FMT;
 use crate::consts::ENV_OPT_PUSHDESC;
 use crate::consts::ENV_OPT_ASYNC_COMPUTE;
 use crate::consts::ENV_OPT_SYNC2;
@@ -23,6 +24,7 @@ use crate::consts::GENERAL_FLOAT_KEYS;
 use crate::consts::GENERAL_UINT_KEYS;
 use crate::consts::HEAD;
 use crate::consts::OPT_DYNREN_KEY;
+use crate::consts::OPT_MUTABLE_FMT_KEY;
 use crate::consts::OPT_PUSHDESC_KEY;
 use crate::consts::OPT_ASYNC_COMPUTE_KEY;
 use crate::consts::OPT_SYNC2_KEY;
@@ -49,6 +51,7 @@ pub(crate) struct Settings {
     pub(crate) opt_dynren: bool,
     pub(crate) opt_pushdesc: bool,
     pub(crate) opt_sync2: bool,
+    pub(crate) opt_mutable_fmt: bool,
     pub(crate) opt_async_compute: bool,
     pub(crate) compute: bool,
     pub(crate) compute_x: u32,
@@ -63,6 +66,7 @@ impl Default for Settings {
             opt_dynren: true,
             opt_pushdesc: true,
             opt_sync2: true,
+            opt_mutable_fmt: true,
             opt_async_compute: true,
             compute: true,
             compute_x: COMPUTE_X_DEFAULT,
@@ -181,8 +185,11 @@ fn parse_general_uint(doc: &toml::Value, key: &str, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
-fn parse_bool_opt(effects: &HashMap<String, bool>, key: &str, default: bool) -> bool {
-    effects.get(key).copied().unwrap_or(default)
+fn parse_general_bool(doc: &toml::Value, key: &str, default: bool) -> bool {
+    general_table(doc)
+        .and_then(|t| t.get(key))
+        .and_then(toml_bool)
+        .unwrap_or(default)
 }
 
 fn warn_unknown(raw: &str, reg: &[EffectDef]) -> Option<(String, bool)> {
@@ -213,11 +220,12 @@ pub(crate) fn parse_settings(text: &str, reg: &[EffectDef]) -> Settings {
     };
     let effects = effects_of(&doc, reg);
     Settings {
-        opt_dynren: parse_bool_opt(&effects, OPT_DYNREN_KEY, true),
-        opt_pushdesc: parse_bool_opt(&effects, OPT_PUSHDESC_KEY, true),
-        opt_sync2: parse_bool_opt(&effects, OPT_SYNC2_KEY, true),
-        opt_async_compute: parse_bool_opt(&effects, OPT_ASYNC_COMPUTE_KEY, true),
-        compute: parse_bool_opt(&effects, COMPUTE_KEY, true),
+        opt_dynren: parse_general_bool(&doc, OPT_DYNREN_KEY, true),
+        opt_pushdesc: parse_general_bool(&doc, OPT_PUSHDESC_KEY, true),
+        opt_sync2: parse_general_bool(&doc, OPT_SYNC2_KEY, true),
+        opt_mutable_fmt: parse_general_bool(&doc, OPT_MUTABLE_FMT_KEY, true),
+        opt_async_compute: parse_general_bool(&doc, OPT_ASYNC_COMPUTE_KEY, true),
+        compute: parse_general_bool(&doc, COMPUTE_KEY, true),
         compute_x: parse_general_uint(&doc, COMPUTE_X_KEY, COMPUTE_X_DEFAULT),
         compute_y: parse_general_uint(&doc, COMPUTE_Y_KEY, COMPUTE_Y_DEFAULT),
         res_scale: parse_res_scale(&doc),
@@ -239,6 +247,7 @@ pub(crate) fn settings_from_env(reg: &[EffectDef]) -> Settings {
         opt_dynren: env_bool(ENV_OPT_DYNREN, true),
         opt_pushdesc: env_bool(ENV_OPT_PUSHDESC, true),
         opt_sync2: env_bool(ENV_OPT_SYNC2, true),
+        opt_mutable_fmt: env_bool(ENV_OPT_MUTABLE_FMT, true),
         opt_async_compute: env_bool(ENV_OPT_ASYNC_COMPUTE, true),
         compute: env_bool(ENV_COMPUTE, true),
         compute_x: env_uint(ENV_COMPUTE_X, COMPUTE_X_DEFAULT),

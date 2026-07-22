@@ -29,7 +29,7 @@ Sections below follow the runtime effect order: geometric, denoise,
 anti‑aliasing, sharpening / local contrast, blur, image quality,
 temporal processing, exposure, tonemapping, white balance, colour
 grading, channel curves, colour balance, selective colour,
-stylization, accessibility, inline effects, hardware simulation,
+stylization, toon, accessibility, inline effects, hardware simulation,
 overlay.
 
 =======================================================================
@@ -365,6 +365,35 @@ color_invert
 
 luminance_grayscale
   BT.709 luminance weights for perceptually correct grayscale.
+
+=======================================================================
+TOON
+=======================================================================
+
+kuwahara_paint
+  Kuwahara filter: M. Kuwahara, K. Hachimura, S. Eiho, M. Kinoshita
+  (1976), "Processing of RI‑angiocardiographic images".  Selects the
+  lowest‑variance quadrant mean of the shared 3×3 neighbourhood.
+  Configured under [toon] but executed in the spatial chain, directly
+  after denoise, so downstream effects see the flattened image.
+
+cel_shade
+  Luminance band quantization (cel / toon shading) with smoothstep
+  band borders.  Public‑domain technique popularized by cel‑shaded
+  games.
+
+manga_screentone
+  45° rotated halftone dot screen driven by darkness, emulating manga
+  print screentone.  Classic halftone printing technique.
+
+crosshatch_shade
+  Dual‑direction diagonal hatch shading in shadows, emulating pen‑and‑
+  ink crosshatching.  Public‑domain technique.
+
+ink_outline
+  Gradient‑magnitude edge darkening producing ink outlines.  Standard
+  edge‑detection stylization; uses RGB gradients rather than luma only
+  so equal‑luminance hue edges are detected.
 
 =======================================================================
 ACCESSIBILITY

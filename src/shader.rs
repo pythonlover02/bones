@@ -6,9 +6,13 @@ use crate::config::Settings;
 use crate::consts::COMPUTE_X_DEFAULT;
 use crate::consts::COMPUTE_Y_DEFAULT;
 use crate::consts::EffectDef;
-use crate::consts::UBER_SRC;
+use crate::consts::GLSL_CONSTANTS;
+use crate::consts::GLSL_FUNCTIONS;
+use crate::consts::GLSL_VERSION;
+use crate::consts::IO_COMPUTE;
+use crate::consts::IO_FRAGMENT;
 use crate::consts::VERT_SRC;
-use crate::effect::emit_defines;
+use crate::effect::shader_body_frags;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
 
@@ -25,11 +29,6 @@ static SHADER_WG: RwLock<(u32, u32)> = RwLock::new((COMPUTE_X_DEFAULT, COMPUTE_Y
 static VERT_SPV: RwLock<Option<Vec<u32>>> = RwLock::new(None);
 static WG_LIMITS: RwLock<(u32, u32, u32)> = RwLock::new((u32::MAX, u32::MAX, u32::MAX));
 pub(crate) static GENERATION: AtomicI32 = AtomicI32::new(0);
-
-fn split_first_line(src: &str) -> (&str, &str) {
-    let nl = src.find('\n').unwrap_or(src.len());
-    (&src[..nl], src.get(nl + 1..).unwrap_or(""))
-}
 
 fn read_wg_limits() -> (u32, u32, u32) {
     WG_LIMITS.read().map(|g| *g).unwrap_or((u32::MAX, u32::MAX, u32::MAX))
@@ -92,26 +91,40 @@ pub(crate) fn set_wg_limits(max_x: u32, max_y: u32, max_inv: u32) {
     }
 }
 
+fn line_marked(idx: usize, src: &str) -> String {
+    format!("#line 1 {}\n{}", idx, src)
+}
+
+fn assemble_body(s: &Settings, reg: &[EffectDef]) -> String {
+    shader_body_frags(s, reg)
+        .iter()
+        .enumerate()
+        .map(|(i, src)| line_marked(i + 1, src))
+        .collect()
+}
+
 fn assemble_frag_source(s: &Settings, reg: &[EffectDef]) -> String {
-    let (ver, rest) = split_first_line(UBER_SRC);
-    format!(
-        "{}\n{}{}",
-        ver,
-        emit_defines(s, reg),
-        rest
-    )
+    [
+        GLSL_VERSION.to_string(),
+        "\n".into(),
+        IO_FRAGMENT.into(),
+        GLSL_CONSTANTS.into(),
+        GLSL_FUNCTIONS.into(),
+        assemble_body(s, reg),
+    ]
+    .concat()
 }
 
 fn assemble_comp_source(s: &Settings, reg: &[EffectDef], wg_x: u32, wg_y: u32) -> String {
-    let (ver, rest) = split_first_line(UBER_SRC);
-    format!(
-        "{}\n#define COMPUTE_PATH\n#define LOCAL_SIZE_X {}\n#define LOCAL_SIZE_Y {}\n{}{}",
-        ver,
-        wg_x,
-        wg_y,
-        emit_defines(s, reg),
-        rest
-    )
+    [
+        GLSL_VERSION.to_string(),
+        format!("\n#define LOCAL_SIZE_X {}\n#define LOCAL_SIZE_Y {}\n", wg_x, wg_y),
+        IO_COMPUTE.into(),
+        GLSL_CONSTANTS.into(),
+        GLSL_FUNCTIONS.into(),
+        assemble_body(s, reg),
+    ]
+    .concat()
 }
 
 fn new_compiler() -> Result<shaderc::Compiler, ()> {

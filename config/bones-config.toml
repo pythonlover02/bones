@@ -1,0 +1,997 @@
+##bones default profile
+# effects process in this order: geometric warps -> master fetch -> shared
+# neighborhood taps -> denoise/AA/sharpen/blur/glow -> color grade, tonemap,
+# stylization and hardware sim color half (all deterministic) -> temporal
+# smoothing in final display space -> time-varying grain/flicker -> HUD
+# overlay. temporal history therefore always match the fully processed
+# frame: exposure, tonemapping and display masks can never compound
+# through the feedback loop.
+# pick ONE anti aliasing ONE tonemapper and ONE primary temporal smoother for
+# best result, but the source never rejects stacked effects: stack whatever
+# look you find good.
+
+[general]
+# resolution_scale to scale the post-fx render target relative to the swap
+# chain. 1.0 = render at native resolution. 0.5 = render the entire
+# post-fx pipeline at half resolution then bilinear upscale to native at
+# the final blit. lower value gives big perf wins for expensive effect
+# stacks at the cost of softer image. minimum 0.05. hot-reloadable:
+# changing it while the game runs triggers a full post-fx resource
+# rebuild on the next present, no swapchain recreation needed.
+# env: BONES_RESOLUTION_SCALE
+resolution_scale = 1.0
+
+# optimize_dynamic_rendering to enable VK_KHR_dynamic_rendering at device
+# creation when supported. logged at device creation when not
+# available. on by default. env: BONES_OPTIMIZE_DYNAMIC_RENDERING
+optimize_dynamic_rendering = true
+
+# optimize_push_descriptors to enable VK_KHR_push_descriptor at device
+# creation when supported. logged when not available. on by default.
+# env: BONES_OPTIMIZE_PUSH_DESCRIPTORS
+optimize_push_descriptors = true
+
+# optimize_sync2 to enable VK_KHR_synchronization2 at device creation
+# when supported. enables batched pipeline barriers via
+# vkCmdPipelineBarrier2 with 64-bit stage masks. reduces per-frame CPU
+# barrier overhead by collapsing the post-pass and end-of-frame
+# barrier pairs into single calls. logged when not available. on by
+# default. env: BONES_OPTIMIZE_SYNC2
+optimize_sync2 = true
+
+# optimize_mutable_format to enable VK_KHR_swapchain_mutable_format at
+# device creation when supported. lets the layer view sRGB swap image
+# as their UNORM equivalent so the shader sample the swap image
+# directly with no input copy. device-level: cannot be hot-reloaded,
+# require a game restart. turn off if you see gamma shift or
+# corruption on a specific driver. logged when not available. on by
+# default. env: BONES_OPTIMIZE_MUTABLE_FORMAT
+optimize_mutable_format = true
+
+# optimize_async_compute to submit post-fx work on a dedicated async
+# compute queue family when one is available. lets the post-fx
+# dispatch run concurrently with the game next-frame rendering
+# instead of serially before present. requires the compute path
+# (compute = true), a queue family with COMPUTE but not GRAPHICS bit
+# that the application did not request, and swapchain creation that
+# permits CONCURRENT sharing across the involved families. silently
+# falls back to graphics-queue submission when any of these conditions
+# is not met. on by default. env: BONES_OPTIMIZE_ASYNC_COMPUTE
+optimize_async_compute = true
+
+# compute to use a compute shader instead of a fragment shader for the
+# ubershader pass. compute wins on most modern GPUs by skipping the
+# rasterizer and exploiting shared memory/subgroup paths. requires
+# the device feature shaderStorageImageWriteWithoutFormat and a swap
+# format that supports VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT. if either
+# is missing a log line is emitted and the layer falls back to the
+# fragment shader path for that swapchain. on by default.
+# env: BONES_COMPUTE
+compute = true
+
+# compute_x and compute_y to the workgroup size on each axis for the
+# compute shader. 8x8 is the safe default and is what we use unless
+# you know your hardware prefers something else (some AMD GPUs win
+# with 16x16; some NVIDIA GPUs prefer 32x4 for memory-coalesced
+# loads). product must not exceed the device max compute work group
+# invocations or we fall back to 8x8 with a log line. each axis is
+# clamped to the device max work group size on that axis.
+# env: BONES_COMPUTE_X, BONES_COMPUTE_Y
+compute_x = 8
+compute_y = 8
+
+[geometric]
+# warp texture coordinate before any pixel be sampled. all warps here are
+# deterministic (no time, no random) so temporal history align frame to
+# frame across resolution. the hardware sim geometric halves (CRT barrel,
+# VHS ripple, console pixel grids) also run in this stage.
+
+identity = false
+
+# mirror_horizontal to flip image left right around vertical axis
+mirror_horizontal = false
+
+# mirror_vertical to flip image top bottom around horizontal axis
+mirror_vertical = false
+
+# rotate_90 to rotate 90° clockwise
+rotate_90 = false
+
+# rotate_180 to rotate 180°
+rotate_180 = false
+
+# rotate_270 to rotate 270° clockwise (90° counter clockwise)
+rotate_270 = false
+
+# center_zoom to 1.5x magnification from screen center
+center_zoom = false
+
+# polynomial_distort to radial lens distortion using the Brown Conrady k1/k2
+#   polynomial model (the same distortion model used in OpenCV camera
+#   calibration). simulate cheap wide angle lens curvature.
+polynomial_distort = false
+
+# barrel_undistort to inverse barrel correction to straighten curved line
+#   the opposite of polynomial_distort. useful for undoing lens warp on
+#   emulated title or ultrawide display.
+barrel_undistort = false
+
+# fisheye_warp to wide angle fisheye projection via atan remapping. produce
+#   the extreme curvature of a real fisheye lens rather than the mild barrel
+#   distortion of polynomial_distort.
+fisheye_warp = false
+
+# trapezoid_warp to perspective keystoning make the image wider at the
+#   bottom than the top. simulate looking at a screen from below.
+trapezoid_warp = false
+
+# sharp_bilinear to pixel art sharpener using Hermite smoothstep UV warp.
+#   snap texture sampling toward pixel center so the GPU builtin
+#   linear filter produce crisp pixel boundarie without nearest neighbor
+#   shimmer. essential for retro/pixel art game running at nonnative
+#   resolution. this must run in the UV stage because it work by changing
+#   WHERE the texture be sampled not what happen after.
+sharp_bilinear = false
+
+[denoise]
+# run first in the spatial chain to clean noise before other processing.
+# kuwahara_paint from [toon] also run here, right after denoise, so it
+# flatten the source image before AA sharpening and grading.
+
+# bilateral_denoise to bilateral filter the standard noise reduction
+#   technique from Tomasi & Manduchi (1998). smooth area where
+#   neighboring pixel be similar in color (noise) while preserving
+#   area where neighbor differ (edge). the same core algorithm
+#   used in Photoshop "Surface Blur" and most camera noise reduction.
+bilateral_denoise = false
+
+[anti_aliasing]
+# smooth jagged edge (stairstepping). run after denoise before sharpening.
+# if your game already have builtin AA you probably do not need these.
+# pick ONE to stacking multiple AA method waste performance for no benefit.
+
+# luma_edge_aa to this be FXAA (Fast Approximate Anti Aliasing) by Timothy
+#   Lottes at NVIDIA. the most widely used postprocess AA in gaming history.
+#   detect edge by computing luminance gradient across a 3x3 neighborhood
+#   then blur along the detected edge direction with clamped span. fast
+#   effective slightly soften the image. if you have played any game from
+#   2011 present with "FXAA" in the setting menu this be that algorithm.
+luma_edge_aa = false
+
+# normal_filter_aa to normal filter AA (NFAA). compute the gradient
+#   perpendicular to each edge then sample along the tangent direction
+#   to blend away stairstepping. lighter weight than FXAA slightly less
+#   effective on diagonal edge. good for low power hardware.
+normal_filter_aa = false
+
+# morphological_aa to conservative morphological AA inspired by Intel
+#   CMAA technique. blend cardinal and diagonal neighbor weighted by
+#   absolute edge magnitude (sum of per channel difference) with a soft
+#   threshold. more conservative than FXAA to preserve more detail but
+#   catch fewer edge.
+morphological_aa = false
+
+# subpixel_aa to subpixel morphological AA inspired by SMAA (Enhanced
+#   Subpixel Morphological Antialiasing by Jimenez et al. 2012). detect
+#   whether edge be primarily horizontal or vertical then select the
+#   matching directional blend. SMAA be considered the gold standard of
+#   post process AA in modern game to this be a single pass approximation
+#   of it edge detection and blending logic.
+subpixel_aa = false
+
+[sharpening]
+# enhance detail and crispness. run after AA.
+# these can be combined (e.g. one sharpener + midtone_clarity) but stacking
+# multiple strong sharpener will produce halo and ringing artifact.
+
+# contrast_adaptive_sharpen to this be CAS (Contrast Adaptive Sharpening)
+#   from AMD FidelityFX suite (open source GPUOpen). the same sharpener
+#   available in the AMD Radeon driver overlay and used as the final stage
+#   in AMD FSR 1.0 upscaling pipeline. work by computing the ratio of
+#   local min to max so it sharpen detail in low contrast area (where
+#   you need it) without overshooting in high contrast area (where halo
+#   would appear).
+contrast_adaptive_sharpen = false
+
+# robust_contrast_sharpen to this be RCAS (Robust Contrast Adaptive
+#   Sharpening) from AMD FSR 1.0 (open source GPUOpen). a simplified
+#   variant of CAS that clamp the sharpening result to the neighborhood
+#   min/max making it impossible to produce ringing artifact. slightly
+#   less aggressive than CAS but completely halo free.
+robust_contrast_sharpen = false
+
+# edge_directed_sharpen to edge aware sharpening based on NVIDIA NIS
+#   (NVIDIA Image Scaling open source). measure gradient magnitude to
+#   determine how much each pixel be on an edge then scale sharpening
+#   proportionally so edge get full sharpening and flat area (texture
+#   skin) get minimal sharpening. concentrate detail enhancement where
+#   structure exist rather than amplifying noise in smooth region.
+edge_directed_sharpen = false
+
+# laplacian_sharpen to the simplest possible sharpener: center pixel minus
+#   the average of it four neighbor scaled by strength. this be the
+#   "Sharpen" filter in every image editor. effective but produce halo
+#   on high contrast edge. use robust_contrast_sharpen or
+#   contrast_adaptive_sharpen instead if halo bother you.
+laplacian_sharpen = false
+
+# luminance_sharpen to sharpen only the luminance (brightness) channel
+#   leaving color untouched. prevent the color fringing artifact that
+#   RGB sharpener can produce on saturated edge. the same principle
+#   used by Lightroom sharpening which operate in Lab color space.
+luminance_sharpen = false
+
+# midtone_clarity to midtone local contrast enhancement the same concept
+#   as Photoshop/Lightroom "Clarity" slider. boost contrast in midtone
+#   (the middle brightness range) without clipping highlight or crushing
+#   shadow. excellent for making flat looking game feel more punchy.
+midtone_clarity = false
+
+# falloff_sharpen to adaptive sharpen where strength be inversely
+#   proportional to local edge energy. flat area with fine texture get
+#   full sharpening; strong edge get almost none. reduce halo compared
+#   to laplacian_sharpen while being more aggressive on fine detail.
+falloff_sharpen = false
+
+# power_curve_sharpen to filmic sharpen using a rational response curve
+#   instead of linear scaling. small difference get boosted more than
+#   large difference producing a softer more cinematic look than
+#   linear sharpener. good for story driven game where you want
+#   enhanced detail without a "processed" look.
+power_curve_sharpen = false
+
+# unsharp_mask to the traditional darkroom/Photoshop technique: subtract
+#   a blurred version of the image from the original then add the
+#   difference back scaled by an amount. use a weighted 3x3 kernel
+#   (center + cardinal + diagonal weight). the classic photographic
+#   sharpening method.
+unsharp_mask = false
+
+[local_contrast]
+# local_contrast to per pixel contrast enhancement based on the ratio of
+#   center luminance to neighborhood average. make each pixel "pop"
+#   relative to it surrounding. similar to the local contrast
+#   enhancement in DaVinci Resolve color grading tool.
+local_contrast = false
+
+[blur]
+# various blur effect. can be used creatively (tilt shift for miniature
+# look radial blur for speed effect) or practically (soften oversharpened
+# game output).
+
+# gaussian_blur to weighted 3x3 blur with Gaussian approximating weight
+#   (center 4 cardinal 2 diagonal 1). the standard "Gaussian Blur" from
+#   every image editor just at a small fixed kernel size.
+gaussian_blur = false
+
+# box_blur to large radius box blur via Kawase dual filter pattern. four
+#   bilinear paired sample at half pixel offset exploit GPU bilinear
+#   filtering to cover a wide neighborhood at minimum fetch cost. produce
+#   the same broad uniform blur as a multi tap box kernel for a fraction
+#   of the bandwidth.
+box_blur = false
+
+# bokeh_blur to circular ring blur simulating shallow depth of field (the
+#   blurry background you get with a wide aperture camera lens). four
+#   bilinear paired sample around the unit circle with brightness
+#   weighting reproduce the characteristic "bokeh circle" of out of focus
+#   highlight at lower fetch cost than naive ring sampling.
+bokeh_blur = false
+
+# tilt_shift_blur to miniature/diorama effect. a sharp horizontal band
+#   across the middle of the screen with progressive blur toward the top
+#   and bottom edge. make real scene look like tiny scale model.
+#   the same effect Instagram popularized in 2010.
+tilt_shift_blur = false
+
+# radial_blur to zoom blur radiating from screen center. simulate the
+#   effect of zooming a camera lens during exposure or a "speed line"
+#   feeling. useful for racing game or dramatic screenshot.
+radial_blur = false
+
+[image_quality]
+# banding cleanup and light bleed. bloom and flare run before tonemapping
+# so glow accumulate in scene light.
+
+# gradient_deband to remove visible banding in color gradient (the
+#   stairstepping you see in dark sky or smooth surface). sample a
+#   hash picked neighbor within range and if the color difference be
+#   below threshold average them. the neighbor pick be static per pixel
+#   (no time) so the result be deterministic and temporal history stay
+#   aligned. essential for game with 8 bit output and dark scene.
+gradient_deband = false
+
+# threshold_bloom to bright pixel glow. find pixel above a brightness
+#   threshold (0.7) accumulate their excess brightness from the immediate
+#   neighbor and add it back as a local glow. a single pass small radius
+#   approximation of the multi pass bloom used in game engine. make
+#   bright light explosion and reflection "glow" at close range.
+threshold_bloom = false
+
+# ghost_flare to lens flare ghost simulation. sample bright spot at
+#   increasing distance along the vector from screen center to each pixel
+#   creating the circular "ghost" reflection you see when pointing a camera
+#   at a bright light. similar to the lens flare effect in JJ Abrams film.
+ghost_flare = false
+
+[inline]
+# per pixel lens/film effect. the light bleed member (chromatic_aberration,
+# red_halation, anamorphic_streak) run before tonemapping where light
+# scatter physically happen. the frame member (radial_vignette,
+# cinematic_letterbox, ordered_dither) run in the deterministic color
+# stage. gaussian_grain run after temporal smoothing so animated grain
+# never enter history.
+
+# chromatic_aberration to lateral chromatic aberration. shift the red
+#   channel outward from center and the blue channel inward (or vice
+#   versa) simulating the color fringing of a cheap camera lens that
+#   cannot focus all wavelength to the same point. happen at master
+#   fetch so it form the base image before any neighborhood operation.
+chromatic_aberration = false
+
+# red_halation to halation glow. in real film bright highlight scatter
+#   light through the film base and re expose the emulsion from behind
+#   creating a red glow around bright object. derived from shared corner
+#   tap so it dedupe with any other 3x3 consumer enabled.
+red_halation = false
+
+# anamorphic_streak to horizontal streak flare from bright highlight.
+#   simulate the horizontal lens flare streak produced by anamorphic
+#   (widescreen) cinema lens. six bilinear paired horizontal sample
+#   with brightness threshold tinted blue to match real anamorphic
+#   coating. all distance resolution scaled.
+anamorphic_streak = false
+
+# radial_vignette to darkened edge with smoothstep falloff from inner
+#   to outer radius. simulate the natural light falloff at the edge of
+#   a camera lens. standard cinematic technique to draw the eye toward
+#   the center of the frame.
+radial_vignette = false
+
+# cinematic_letterbox to black bar for 2.35:1 widescreen aspect ratio.
+#   the same aspect ratio used by most Hollywood blockbuster (called
+#   "Scope" or "CinemaScope"). add black bar top and bottom to crop
+#   a 16:9 image to the wider cinematic ratio.
+cinematic_letterbox = false
+
+# ordered_dither to Bayer 4x4 ordered dithering (Bayer 1973). add a
+#   spatially structured noise pattern that break up visible color
+#   banding in gradient. the same technique used in GIF image and
+#   retro game console hardware.
+ordered_dither = false
+
+# gaussian_grain to film grain using the Box Muller transform to generate
+#   Gaussian distributed noise. animated via u_time so the grain pattern
+#   change every frame like real film grain. apply after temporal
+#   smoothing so the animated grain never enter history. the Box Muller
+#   method be the standard way to generate Gaussian noise in shader and
+#   scientific computing.
+gaussian_grain = false
+
+[exposure]
+# linear_exposure to fixed 1.3x exposure multiplier applied before
+#   tonemapping. multiply all pixel value by a constant like adjusting
+#   the ISO on a camera. on/off only.
+linear_exposure = false
+
+[tonemapping]
+# map high dynamic range value into displayable [0 1]. essential if
+# the game output value above 1.0 (HDR rendering). each curve have a
+# different "look" to pick ONE based on preference.
+
+# aces_tonemap to the Academy Color Encoding System filmic curve. the
+#   exact Narkowicz (2015) algebraic fit used in countless game and film
+#   VFX pipeline. the ACES curve be the motion picture industry standard
+#   for tone mapping. characteristic warm highlight and slightly crushed
+#   shadow. coefficient: A=2.51 B=0.03 C=2.43 D=0.59 E=0.14.
+aces_tonemap = false
+
+# agx_tonemap to AgX sigmoid curve. a newer alternative to ACES that
+#   avoid the oversaturation and hue shift ACES produce in bright
+#   highlight. operate in log2 domain with a cubic polynomial. used
+#   in Blender new default color management. more neutral than ACES.
+agx_tonemap = false
+
+# reinhard_tonemap to Reinhard extended with white point (Reinhard et al.
+#   2002). the first practical tone mapping operator still popular for
+#   it natural gentle highlight rolloff. white point constant 4.0
+#   (enters squared per the extended Reinhard form).
+reinhard_tonemap = false
+
+# hable_tonemap to the Uncharted 2 filmic curve by John Hable (GDC 2010).
+#   designed specifically for video game with a strong shoulder that
+#   preserve highlight detail and rich midtone contrast. the "cinematic
+#   game look" of the early 2010. use the standard constant:
+#   A=0.15 B=0.5 C=0.1 D=0.2 E=0.02 F=0.3 W=11.2.
+hable_tonemap = false
+
+# lottes_tonemap to Timothy Lottes curve (Lottes 2016). designed as a
+#   more tunable alternative to Reinhard with separate contrast and
+#   shoulder control. Lottes also create FXAA to this be the tone
+#   mapping equivalent of that same "simple but effective" philosophy.
+lottes_tonemap = false
+
+# uchimura_tonemap to the Gran Turismo curve by Hajime Uchimura
+#   (CEDEC 2017). designed for racing game where you need smooth
+#   handling of extremely bright specular highlight (sun reflection
+#   on car paint). smooth toe controlled linear section and shoulder.
+uchimura_tonemap = false
+
+# tony_tonemap to Tony McMapface. simple offset scale highlight rolloff.
+#   the least complex tonemap to just divide by (color + offset) and
+#   rescale. useful as a lightweight baseline.
+tony_tonemap = false
+
+# khronos_tonemap to Khronos PBR Neutral tone mapping from the Khronos
+#   Group PBR specification. soft highlight compression starting at
+#   peak luminance 0.76. designed for physically based rendering pipeline
+#   where color accuracy matter more than dramatic curve.
+khronos_tonemap = false
+
+[white_balance]
+# neutral_white_balance to D65 daylight chromatic adaptation. gently
+#   correct typical display warm bias toward the CIE D65 reference
+#   white point used in sRGB and Rec.709 standard. a subtle correction
+#   that slightly reduce red warmth and boost blue to reach neutral
+#   reference white.
+neutral_white_balance = false
+
+# warm_temperature to warm color shift: red boosted 1.05x blue cut to
+#   0.92x. make the image warmer like sunset light or indoor tungsten
+#   lighting. similar to setting white balance to "Tungsten" on a camera.
+warm_temperature = false
+
+# cool_temperature to cool color shift: blue boosted 1.05x red cut to
+#   0.92x. make the image cooler like overcast daylight or moonlight.
+#   similar to setting white balance to "Daylight" on a camera.
+cool_temperature = false
+
+[color_grading]
+# saturation_contrast_grade to combined saturation (1.1x) contrast (1.05x)
+#   and brightness offset in a single pass. a general purpose "make it
+#   look better" adjustment similar to auto enhance in phone camera.
+saturation_contrast_grade = false
+
+# levels_remap to black/white point remapping in the spirit of the
+#   Photoshop Levels adjustment. pull the input range slightly inward
+#   (0.02 to 0.98) and rescale to full range for a gentle contrast
+#   expansion. on/off only.
+levels_remap = false
+
+# gamma_correct to fixed gamma curve that darken midtone slightly
+#   (gamma 1.1). apply a power function to all channel. the same gamma
+#   correction used in display calibration. on/off only.
+gamma_correct = false
+
+# vibrance_boost to smart saturation. boost saturation on pixel that
+#   be already low saturation while leaving already vivid color alone.
+#   prevent clipping artifact that uniform saturation boost cause.
+#   the same algorithm as Lightroom "Vibrance" slider (as opposed to
+#   "Saturation" which boost everything equally).
+vibrance_boost = false
+
+# hsl_transform to a mild saturation boost (1.1x) in HSL color space,
+#   in the spirit of the Photoshop Hue/Saturation dialog. on/off only.
+#   note: do not enable alongside red/green/blue_channel_curve or
+#   hermite_curves as the curve double apply on shared channel.
+hsl_transform = false
+
+# split_tone to tint shadow cool (blue) and highlight warm (amber)
+#   independently with a luminance driven crossfade. the classic
+#   cinematic "orange and teal" look used in blockbuster color grading.
+#   same concept as Lightroom Split Toning panel.
+split_tone = false
+
+# lift_gamma_gain to a slight shadow lift (the "lift" of a three way
+#   color corrector), the standard tool in DaVinci Resolve, Premiere
+#   Pro and every professional color grading application. on/off only.
+lift_gamma_gain = false
+
+# hermite_curves to s curve contrast via Hermite smoothstep (3t² to 2t³)
+#   applied to all channel. the same smooth s curve used in CSS
+#   transition and shader easing function. increase contrast in
+#   midtone while compressing highlight and shadow. note: enabling
+#   alongside any of red/green/blue_channel_curve will double apply
+#   on that channel.
+hermite_curves = false
+
+[channel_curves]
+# per channel s curve for fine color control. note: each channel curve
+# stack with hermite_curves on the same channel; enable only one of the
+# two for predictable result.
+
+# red_channel_curve to Hermite s curve applied to red channel only
+red_channel_curve = false
+
+# green_channel_curve to Hermite s curve applied to green channel only
+green_channel_curve = false
+
+# blue_channel_curve to Hermite s curve applied to blue channel only
+blue_channel_curve = false
+
+[color_balance]
+# trizone_color_balance to three zone color tint. shadow get a teal push
+#   (cyan 0.03 magenta +0.01 yellow +0.02) highlight get a warm push
+#   (cyan +0.02 yellow 0.02). produce a cinematic teal and orange look
+#   similar to the default color grading in many Hollywood blockbuster.
+#   same concept as DaVinci Resolve three way color balance wheel.
+trizone_color_balance = false
+
+[selective_color]
+# boost saturation for pixel dominated by a specific color channel
+
+# red_selective_saturate to boost saturation of red dominant pixel by
+#   0.3x their existing saturation. make red pop without affecting
+#   green or blue. useful for sunset scene or red themed game.
+red_selective_saturate = false
+
+# green_selective_saturate to boost saturation of green dominant pixel
+green_selective_saturate = false
+
+# blue_selective_saturate to boost saturation of blue dominant pixel
+blue_selective_saturate = false
+
+[stylization]
+# creative color effect for specific visual style
+
+# dynamic_range_crush to narrow the dynamic range by clamping black
+#   and white point inward. lift shadow and pull down highlight for
+#   a flatter more "Instagram filter" look. remap the crushed range
+#   back to full [0 1] so the image stay usable.
+dynamic_range_crush = false
+
+# duotone_map to map the entire image to two color based on luminance.
+#   shadow become dark blue (0.1 0.1 0.3) highlight become warm
+#   cream (1.0 0.9 0.7). the same duotone effect used in Spotify
+#   playlist cover and modern graphic design.
+duotone_map = false
+
+# color_wash_tint to tint the entire image toward a single color with
+#   0.2 blend strength. a subtle color wash that unify the palette.
+color_wash_tint = false
+
+# posterize_quantize to reduce to 8 color level per channel creating
+#   a poster/comic book look with visible color banding. the same effect
+#   as Photoshop Posterize filter.
+posterize_quantize = false
+
+# bleach_bypass to desaturated high contrast look simulating the "bleach
+#   bypass" photochemical process where the bleach bath be skipped during
+#   film development. produce the gritty desaturated high contrast
+#   look of film like Saving Private Ryan and Minority Report. use
+#   an overlay blend mode between color and luminance.
+bleach_bypass = false
+
+# technicolor_process to vintage three strip Technicolor simulation.
+#   cross bleed complementary color between channel producing the
+#   characteristic oversaturated slightly unrealistic color palette of
+#   1930s 50s Technicolor film like The Wizard of Oz.
+technicolor_process = false
+
+# midpoint_contrast to simple contrast boost: scale the distance from
+#   the 0.5 midpoint by 1.5x. make dark darker and light lighter.
+#   the simplest possible contrast adjustment.
+midpoint_contrast = false
+
+# color_invert to negative image. subtract each channel from 1.0
+#   like a photographic negative.
+color_invert = false
+
+# luminance_grayscale to convert to grayscale using BT.709 luminance
+#   weight (0.2126R + 0.7152G + 0.0722B). the perceptually correct
+#   conversion used in HDTV standard to green contribute the most
+#   because human vision be most sensitive to green.
+luminance_grayscale = false
+
+[toon]
+# anime and cartoon rendering. cel_shade + ink_outline together be the
+# classic toon look; add kuwahara_paint for the painted background feel.
+# manga_screentone and crosshatch_shade be print technique that pair
+# well with luminance_grayscale. all five be deterministic (no time no
+# random) so temporal history stay aligned frame to frame. note:
+# kuwahara_paint run early in the spatial chain (right after denoise)
+# so it flatten the source image before AA sharpening and grading.
+# cel_shade manga_screentone and crosshatch_shade run here in the
+# deterministic color stage. ink_outline run last, just before temporal
+# smoothing, so line stay on top of everything and outlined edge reject
+# history for free anti ghosting.
+
+# kuwahara_paint to Kuwahara filter (Kuwahara et al. 1976) the classic
+#   painterly effect. pick the lowest variance quadrant mean of the
+#   shared 3x3 neighborhood so region flatten into brush stroke while
+#   edge stay razor sharp. the algorithm behind most "oil painting"
+#   filter. reuse the shared tap so it near free when any sharpener
+#   or AA be also enabled.
+kuwahara_paint = false
+
+# cel_shade to quantize luminance into 4 flat band while preserving hue
+#   the core technique of every cel shaded game (Wind Waker Jet Set
+#   Radio Guilty Gear). soft band border via smoothstep so band do not
+#   shimmer in motion and the temporal stabilizer stay aligned.
+cel_shade = false
+
+# manga_screentone to 45 degree rotated halftone dot in shadow region
+#   like manga print screentone. dot radius grow with darkness. cell
+#   size resolution scaled. deterministic screen space pattern.
+manga_screentone = false
+
+# crosshatch_shade to diagonal pencil hatch line in midtone shadow with
+#   a second crossed direction in deep shadow. the traditional comic
+#   ink shading technique. line pitch resolution scaled.
+crosshatch_shade = false
+
+# ink_outline to dark ink line on strong color gradient. RGB gradient
+#   detection so it catch hue edge that luma only detection miss (red
+#   character on green grass at equal brightness). run last of the toon
+#   effect so line stay on top of cel band and screentone.
+ink_outline = false
+
+[accessibility]
+# color vision simulation and correction tool
+
+# protanopia_simulation to simulate protanopia (red blind) vision using
+#   a 3x3 color transformation matrix. show what the image look like
+#   to someone with red cone deficiency (~1% of male).
+protanopia_simulation = false
+
+# deuteranopia_simulation to simulate deuteranopia (green blind) vision.
+#   the most common color vision deficiency (~6% of male).
+deuteranopia_simulation = false
+
+# tritanopia_simulation to simulate tritanopia (blue blind) vision.
+#   rare (~0.01% of population).
+tritanopia_simulation = false
+
+# protanopia_correct to Daltonization for protanopia. redistribute the
+#   color information lost by red cone deficiency to the green and blue
+#   channel making red green distinction visible through brightness
+#   and blue shift difference. designed to be used BY someone with
+#   protanopia to improve their ability to distinguish color.
+protanopia_correct = false
+
+# deuteranopia_correct to Daltonization for deuteranopia. same principle
+#   correcting for green cone deficiency.
+deuteranopia_correct = false
+
+# tritanopia_correct to Daltonization for tritanopia. redistribute lost
+#   blue channel information to red and green channel.
+tritanopia_correct = false
+
+[hardware_simulation]
+# simulate specific hardware rendering and display characteristic.
+# split across two phase: deterministic UV warp run in the geometric
+# stage (alongside fisheye and barrel) so temporal stay aligned, and
+# color/mask/quantize run in the deterministic color stage so they act
+# as the "monitor" showing the finished image. AA sharpen and color
+# grade see the ideal frame not the CRT distorted one. the time varying
+# sliver (CRT brightness pulse, VHS noise and dropout) apply after
+# temporal smoothing so it flicker without entering history.
+#
+# pick ONE console GPU simulation for best result. stacking multiple be
+# undefined but never rejected. pair one console with one display sim
+# for the full experience: ps1_simulation + crt_simulation = 90s living
+# room. psp_simulation + lcd_subpixel = handheld screen.
+# n64_simulation + crt_simulation = childhood.
+
+# ps1_simulation to PlayStation 1 GPU simulation. vertex snap via
+#   coarse grid quantization simulate the GTE fixed point integer
+#   coordinate quantization. nearest neighbor snap remove bilinear
+#   filtering. 15 bit color (5 bit per channel 32 level) with Bayer
+#   4x4 ordered dither.
+ps1_simulation = false
+
+# saturn_simulation to Sega Saturn GPU simulation. coarse pixel
+#   quantization plus smoothing pass approximate the gouraud shading
+#   interpolation banding across polygon face. dark desaturated color
+#   palette with warm brown shift. 15 bit color with dither.
+saturn_simulation = false
+
+# n64_simulation to Nintendo 64 GPU simulation. unique 3 point bilinear
+#   filter create the characteristic vaseline smear look. radial
+#   distance fog darken screen edge. warm color shift. the opposite
+#   of PS1: where PS1 be sharp and jittery N64 be soft and smeared.
+n64_simulation = false
+
+# dreamcast_simulation to Sega Dreamcast GPU simulation. visible texture
+#   shimmer from edge weighting. over bright color response and boosted
+#   saturation. visible polygon edge darkening. subtle specular boost
+#   on bright area.
+dreamcast_simulation = false
+
+# ps2_simulation to PlayStation 2 GPU simulation. 480i interlace combing
+#   on alternating field. horizontal chroma bleed from the GS color
+#   path. soft bloom on bright surface. subtle scanline darkening.
+ps2_simulation = false
+
+# xbox_simulation to original Xbox GPU simulation. DXT S3TC texture
+#   compression 4x4 pixel block artifact. heavy sharpening with
+#   ringing overshoot. crude large radius bloom. plastic specular
+#   boost. slight green warm color bias.
+xbox_simulation = false
+
+# psp_simulation to PlayStation Portable GPU simulation. UV phase quantize
+#   to 480x272 native resolution. LCD gamma washout with black floor at
+#   6 percent and white ceiling at 92 percent. dark region color banding.
+#   slight desaturation. run independent of the temporal stabilizer.
+psp_simulation = false
+
+# ps3_simulation to PlayStation 3 GPU simulation. sub HD rendering around
+#   72 percent native upscaled with bilinear filtering. quincunx anti
+#   aliasing half pixel diagonal blend. crushed shadow from RSX gamma.
+#   cool color shift. tear line removed (time varying so it broke the
+#   phase rule); the rest of the PS3 look land intact.
+ps3_simulation = false
+
+# xbox360_simulation to Xbox 360 GPU simulation. sharp 4xMSAA edge cleanup
+#   from free eDRAM anti aliasing. eDRAM tiling seam at one third and
+#   two third screen height. HDR gradient banding in bright region.
+#   lifted warm gamma. slight desaturation with specular peak boost.
+xbox360_simulation = false
+
+# crt_simulation to CRT television simulation. barrel warp distortion
+#   in the geometric stage, RGB phosphor triad mask scanline darkening
+#   and brightness compensation in the deterministic color stage. the
+#   brightness pulsing apply after temporal smoothing so it never enter
+#   history and cannot ghost or drift.
+crt_simulation = false
+
+# phosphor_amber to monochrome amber phosphor CRT. the warm orange white
+#   look of 1980s IBM PC monitor and airport departure board.
+phosphor_amber = false
+
+# phosphor_green to monochrome green phosphor CRT. the classic "hacker
+#   terminal" look from 1970s 80s computer (Apple II VT100).
+phosphor_green = false
+
+# phosphor_red to monochrome red phosphor CRT. less common historically
+#   but used in some military and medical display.
+phosphor_red = false
+
+# scanline_darken to horizontal scanline darkening only without the barrel
+#   warp and phosphor mask of crt_simulation. add the characteristic
+#   "lined" look of a CRT without the geometric distortion.
+scanline_darken = false
+
+# oled_simulation to simulate OLED display characteristic: near black
+#   crush (dark gray fade toward black via smoothstep) plus saturation
+#   boost. make the image look like it displayed on a high end OLED TV.
+oled_simulation = false
+
+# vhs_simulation to VHS videotape degradation. deterministic horizontal
+#   ripple in the geometric stage. chroma desaturation and warm shift in
+#   the deterministic color stage. luma noise line noise and dropout
+#   apply after temporal smoothing so the tape noise never enter history:
+#   it flicker like real tape without smearing or drifting.
+vhs_simulation = false
+
+# lcd_subpixel to visible LCD subpixel grid overlay. show the RGB
+#   subpixel structure you would see examining an LCD screen with a magnifying
+#   glass. cell size scale with resolution so it look correct at any
+#   display resolution.
+lcd_subpixel = false
+
+[temporal]
+# blend current frame with previous frame to reduce flicker noise and judder.
+# this be bones signature feature to 22 temporal processing mode from simple
+# blending to motion compensated accumulation inspired by the research behind
+# DLSS FSR and XeSS.
+#
+# pick ONE primary mode for best result. stacking multiple temporal effect
+# cause compounding ghosting which may or may not be the look you want.
+# the convergent_detail_recovery stabilizer activate automatically
+# whenever any temporal mode be enabled. you get it for free.
+# temporal run after all grading and hardware sim, so every mode compare
+# like with like: heavy stylization no longer weaken the flow based mode
+# and exposure or tonemap can never pulse through the history.
+#
+# ordered from simplest to most sophisticated:
+
+# neighborhood_clamp_aa to temporal anti aliasing (TAA). the standard
+#   technique used in nearly every modern game engine (Unreal Unity
+#   Frostbite). clamp the previous frame pixel to the current frame
+#   3x3 neighborhood min/max box before blending which prevent the
+#   worst ghosting artifact. if a game have "TAA" in it setting it
+#   doing this (plus jitter which we cannot add from outside).
+neighborhood_clamp_aa = false
+
+# motion_reject_denoise to motion gated accumulation. heavily blend
+#   with the previous frame on pixel that have not changed (reducing
+#   noise and flicker) but instantly snap to the current frame when
+#   motion be detected. good for static scene with noisy rendering.
+motion_reject_denoise = false
+
+# motion_detect_blur to motion blur via temporal blending. blend toward
+#   the previous frame proportional to how much each pixel changed so
+#   still area stay sharp and moving area get motion trail. simulate
+#   camera motion blur without engine support.
+motion_detect_blur = false
+
+# constant_blend_smooth to the simplest possible temporal filter: 50/50
+#   mix between current and previous frame. strong flicker reduction but
+#   visible ghosting on any motion. useful as a baseline to compare
+#   against more sophisticated mode.
+constant_blend_smooth = false
+
+# shutter_angle_smooth to physical 180° shutter simulation. weight the
+#   history contribution by motion magnitude so still pixel integrate
+#   over the full half frame exposure while moving pixel get progressive
+#   shorter virtual exposure. produce the cinematic motion blur of real
+#   24fps film camera where stillness be fully integrated and motion
+#   smear be partial. different from constant_blend_smooth which apply
+#   afixed 50/50 blend regardless of motion.
+shutter_angle_smooth = false
+
+# spline_interp_smooth to cubic Hermite reconstruction between the previous
+#   and current frame with extrapolated control point. the Hermite
+#   formulation overshoot slightly past linear blending producing a sharper
+#   temporal response on detail recovery than the constant blend equivalent.
+#   related to the Catmull Rom family of cubic interpolant used in
+#   animation software and video editing.
+spline_interp_smooth = false
+
+# variance_decay_smooth to exponential IIR filter with variance based
+#   decay. when a pixel change a lot between frame blend weight drop
+#   instantly; when stable weight ramp up over time. the temporal
+#   equivalent of a noise gate in audio to pass transient through
+#   while smoothing the steady state signal.
+variance_decay_smooth = false
+
+# dualrate_smooth to dual rate adaptive filter. use two blend weight:
+#   high (0.7) for still area low (0.1) for area with spatial variance.
+#   the crossover be controlled by the variance of the current 5 tap
+#   neighborhood. similar in concept to how adaptive bitrate streaming
+#   adjust quality based on network condition.
+dualrate_smooth = false
+
+# luminance_gate_smooth to luminance adaptive blending. smooth dark
+#   region aggressively (0.7 blend) and barely touch bright area
+#   (0.15 blend). exploit a property of human vision: scotopic (low light)
+#   vision have much worse temporal resolution so you cannot see flicker
+#   as well in dark. this mean heavy dark area smoothing be "free" to
+#   you get the stability benefit without noticing the ghosting.
+luminance_gate_smooth = false
+
+# contrast_gate_smooth to contrast adaptive blending. heavy smoothing on
+#   low contrast region (sky fog gradient wall) where shimmer and
+#   noise be most visible light smoothing on high contrast textured
+#   area where detail matter. different from gradient_gate_smooth because
+#   it respond to contrast magnitude not edge direction.
+contrast_gate_smooth = false
+
+# gradient_gate_smooth to edge aware temporal blending. compute the
+#   spatial gradient (Sobel like) at each pixel; strong gradient = edge.
+#   edge get zero temporal blend (eliminating ghosting at object
+#   boundarie) flat region get full blend (maximizing smoothness).
+#   the most effective single technique for eliminating edge ghosting.
+gradient_gate_smooth = false
+
+# sigma_clip_smooth to variance clipping. compute the per pixel mean
+#   and standard deviation across the 3x3 neighborhood then clip the
+#   history sample to mean ± sigma before blending. this be the core
+#   technique of modern TAA (described by Salvi 2016) and the foundation
+#   that all advanced temporal filter build on. tighter than simple
+#   min/max clamping because sigma adapt to local noise level.
+sigma_clip_smooth = false
+
+# mitchell_kernel_smooth to Mitchell Netravali piecewise cubic spatial
+#   reconstruction (Mitchell & Netravali 1988) with B=1/3 C=1/3 the
+#   standard "balanced" tradeoff between sharpness and ringing used in
+#   Pixar RenderMan Blender and ImageMagick high quality resampling.
+#   apply the cubic kernel to the 3x3 neighborhood for spatial
+#   reconstruction then blend the result with temporal history.
+mitchell_kernel_smooth = false
+
+# ycocg_clip_smooth to YCoCg neighborhood AABB clamp with confidence
+#   weighting. convert to YCoCg color space (a decorrelated luma/chroma
+#   representation) build a bounding box from cardinal tap clamp
+#   history to that box then blend proportional to how much clamping
+#   was needed. this be the same technique used in AMD open source
+#   GPUOpen temporal stabilization code to the core of FSR 2 temporal
+#   accumulation approach.
+ycocg_clip_smooth = false
+
+# bilateral_history_smooth to bilateral temporal filter. compare the
+#   5 tap neighborhood average of the current frame to the 5 tap
+#   neighborhood average of the history frame; if the spatial structure
+#   match (low difference) the history be trustworthy. apply the
+#   bilateral principle of Tomasi & Manduchi (1998) in the temporal
+#   domain rather than the spatial domain.
+bilateral_history_smooth = false
+
+# perceptual_chroma_smooth to convert to YCbCr (the color space used
+#   in JPEG and video compression) then blend luma and chroma channel
+#   separately: luma at 0.4 chroma at 0.7. exploit the fact that human
+#   vision have much lower spatial and temporal resolution for color than
+#   for brightness to you literally cannot see chroma flicker as well as
+#   luma flicker. this mean aggressive chroma smoothing be perceptually
+#   free. the same principle that let JPEG compress color channel 2x
+#   more than brightness (4:2:0 chroma subsampling).
+perceptual_chroma_smooth = false
+
+# frequency_split_smooth to split current and history frame into low
+#   and high frequency band using a 5 tap box decomposition. low
+#   frequencie (broad lighting change sky gradient) be blended
+#   aggressively (0.7) high frequencie (edge texture detail) be
+#   blended lightly (0.2). preserve sharpness while stabilizing the
+#   large scale luminance fluctuation that cause visible flicker.
+#   similar concept to wavelet based denoising used in film production.
+frequency_split_smooth = false
+
+# horn_schunck_smooth to optical flow temporal smoothing using the
+#   Horn Schunck algorithm (Horn & Schunck 1981). estimate per pixel
+#   motion by solving the brightness constancy equation:
+#   Ix*u + Iy*v + It = 0 (spatial gradient time velocity equal
+#   temporal gradient). warp the history frame along the estimated
+#   flow field before blending. this be the foundational optical flow
+#   algorithm to simple enough for a single shader pass effective enough
+#   to meaningfully reduce ghosting on linear motion.
+horn_schunck_smooth = false
+
+# convergent_accumulate to convergent temporal supersampling. blend weight
+#   ramp from 0.1 to 0.85 as pixel stability increase over time (using
+#   a squared stability curve for gradual convergence). in stable scene
+#   natural game camera jitter mean consecutive frame sample slightly
+#   different sub pixel position to accumulating these build up detail
+#   over time. inspired by the principle behind DLSS 2 temporal
+#   accumulation: build up detail from multiple slightly offset sample.
+#   without engine provided jitter it less precise but natural camera
+#   and object micro motion provide enough variation for visible detail
+#   improvement after 5 10 stable frame.
+convergent_accumulate = false
+
+# dualwarp_flow_smooth to dual warp frame interpolation with flow
+#   consistency checking. inspired by AMD open source GPUOpen frame
+#   interpolation pipeline (the algorithm at the core of FSR 3 frame
+#   generation). estimate optical flow then warp BOTH the current
+#   frame backward and the history frame forward by half the motion
+#   vector toward a temporal midpoint to this halve the warp error
+#   compared to single direction warping. perform a forward backward
+#   consistency check using gradient resampled at the warped location
+#   (estimate flow A to B then B to A; if they do not cancel the flow
+#   be unreliable). clamp warped history to the cardinal neighborhood
+#   AABB. fall back to the current frame on disocclusion.
+dualwarp_flow_smooth = false
+
+# variance_flow_accumulate to motion compensated temporal accumulation
+#   with variance clipping and triple confidence gating. based on the
+#   temporal supersampling paper by Brian Karis (SIGGRAPH 2014 "High
+#   Quality Temporal Supersampling") and Jorge Jimenez (GDC 2016
+#   "Filmic SMAA") to these paper were the foundational research that
+#   directly inspired NVIDIA DLSS 2.0 temporal accumulation approach.
+#   estimate optical flow to warp history clip the warped result to
+#   mean ± 1.25σ of the current 5 tap neighborhood (tighter than AABB
+#   clamping) then gate the blend with three independent confidence
+#   factor: motion magnitude luminance consistency and clip distance.
+#   exponential convergence (squared confidence) mean it take several
+#   stable frame to reach full accumulation weight producing the
+#   "detail build up over time" quality DLSS be known for.
+variance_flow_accumulate = false
+
+# edge_reconstruct_smooth to edge directed temporal reconstruction.
+#   inspired by Intel open source XeSS DP4a fallback path (the non
+#   neural network codepath of XeSS that run on any GPU). the distinctive
+#   feature be edge direction detection: compute the local gradient via
+#   Sobel then sample ALONG the edge (not across it) for directional
+#   spatial reconstruction before temporal blending. this mean on a
+#   near horizontal edge it blend pixel left right along the edge
+#   for spatial quality then motion compensate the history clamp to
+#   the neighborhood AABB and blend with edge aware confidence.
+#   no other temporal mode do directional spatial reconstruction.
+edge_reconstruct_smooth = false
+
+[overlay]
+# HUD element drawn on top of the processed image. overlay render
+# after all processing so they be not affected by temporal blending
+# tonemapping color grading or any other effect. your crosshair
+# stay the same color and your FPS counter do not ghost.
+
+# fps_hud to performance overlay showing FPS as a uniquely
+#   colored 7 segment display. just measure FPS. the HUD region be
+#   excluded from temporal blending so digit change never ghost.
+fps_hud = false
+
+# crosshair_overlay to centered crosshair with gap arm and center dot
+#   all resolution scaled. styled with a neon blue core and glow to
+#   match the fps hud. useful for game that lack a built in crosshair
+#   or when you want a consistent crosshair across different game.
+crosshair_overlay = false

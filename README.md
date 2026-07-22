@@ -5,11 +5,11 @@
 
 **Performance first Vulkan ubershader Post Processing layer for Linux.**
 
-Bones is a realtime post-processing layer for Vulkan games on Linux, written in Rust. It registers as an implicit Vulkan layer (`VK_LAYER_BONES_overlay`), gated by `BONES_ENABLE=1` (set automatically by the launcher for the target process), intercepts `vkQueuePresentKHR`, runs a single ubershader containing 125 effects, and presents the modified frame. It is built around an explicit performance stance: one shader, one pass, no ping-pong, with optional GPU-extension fast paths layered on top.
+Bones is a realtime post-processing layer for Vulkan games on Linux, written in Rust. It registers as an implicit Vulkan layer (`VK_LAYER_BONES_overlay`), gated by `BONES_ENABLE=1` (set automatically by the launcher for the target process), intercepts `vkQueuePresentKHR`, runs a single ubershader containing 130 effects, and presents the modified frame. It is built around an explicit performance stance: one shader, one pass, no ping-pong, with optional GPU-extension fast paths layered on top.
 
 ### At a glance
 
-- **125 effects** across 20 categories: geometry, AA, sharpening, 22 temporal modes, 9 console GPU simulations (PS1 through Xbox 360), CRT / OLED / VHS, colour grading, colourblind correction, more.
+- **130 effects** across 21 categories: geometry, AA, sharpening, 22 temporal modes, toon / anime rendering, 9 console GPU simulations (PS1 through Xbox 360), CRT / OLED / VHS, colour grading, colourblind correction, more.
 - **One shader, one dispatch.** Effects are `#ifdef`-toggled in a single ubershader. VRAM is O(1) three textures total, regardless of how many effects you stack.
 - **Compute path by default**, fragment fallback. Compute skips the rasterizer for tighter scheduling and better extension composition; fragment kicks in automatically when the device doesnt support the storage-image features the compute path needs.
 - **Vulkan extension fast paths**: `VK_KHR_dynamic_rendering`, `VK_KHR_push_descriptor`, `VK_KHR_synchronization2`, `VK_KHR_swapchain_mutable_format`. Each is queried at device creation; missing pieces log a single line and the layer keeps running.
@@ -94,10 +94,10 @@ At `vkQueuePresentKHR`, the layer:
 
 The pipeline is built lazily when no effects are enabled, nothing is allocated. Enabling one via hot reload triggers the build on the next present.
 
-Effects run in a **fixed order** across three semantic stages: *render the ideal image* (geometric warps, denoise, AA, sharpening, blur, image quality, temporal, exposure, tonemap, grading, accessibility), *apply lens / film effects* (inline grain, vignette, dither), then *show it on a chosen monitor* (hardware sims act as the display device). Overlays render last.
+Effects run in a **fixed order** across four semantic stages: *render the ideal image* (geometric warps, denoise, AA, sharpening, blur, image quality, pre-grade light bleed), *grade it deterministically* (exposure, tonemap, white balance, grading, stylization, toon colour, accessibility, vignette / letterbox / dither), *show it on a chosen monitor* (hardware sims act as the display device), then *stabilize what you see* (temporal smoothing runs after all grading and hardware sim, in final display space). Time-varying grain and flicker apply after temporal smoothing so they never enter history, and overlays render last. Temporal history therefore always matches the fully processed frame: exposure, tonemapping, and display masks can never compound through the feedback loop.
 
 > [!NOTE]
-> Hardware simulations are **terminal display effects**. AA, sharpen, and TAA run *before* the sim, so they operate on the ideal frame; the sim then interprets that frame as if it were going through PS1 / CRT / VHS hardware.
+> Hardware simulations are **terminal display effects**. AA and sharpen run *before* the sim, so they operate on the ideal frame; the sim then interprets that frame as if it were going through PS1 / CRT / VHS hardware. Temporal smoothing runs *after* the sim, so history always matches the finished, post-sim image.
 
 ## Performance Architecture
 
@@ -135,7 +135,7 @@ So you know exactly what the device is missing.
 
 ### Resolution scale
 
-A single multiplier (`resolution_scale`, default 1.0, minimum 0.05) controls the size of the entire postfx render target relative to the swapchain. Setting it to 0.5 renders all 125 effects at quarter resolution and bilinear-upscales to native at the final blit. On expensive effect stacks this routinely doubles framerate on weaker GPUs at a barely-perceptible cost in sharpness. The history texture follows the same scale, so temporal effects stay aligned.
+A single multiplier (`resolution_scale`, default 1.0, minimum 0.05) controls the size of the entire postfx render target relative to the swapchain. Setting it to 0.5 renders all 130 effects at quarter resolution and bilinear-upscales to native at the final blit. On expensive effect stacks this routinely doubles framerate on weaker GPUs at a barely-perceptible cost in sharpness. The history texture follows the same scale, so temporal effects stay aligned.
 
 Because hardware blitting strictly requires a graphics-capable queue, the final blit always runs on the present queue regardless of `resolution_scale`. The compute dispatch itself still runs on the async queue when available, so the two queues overlap. If the physical device or surface format fundamentally lacks blitting capabilities (`BLIT_DST` / `BLIT_SRC`), the layer safely falls back to an unscaled 1:1 pixel copy on the present queue.
 
@@ -458,7 +458,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 
 ## Effect Catalogue
 
-125 effects in 20 categories, applied in the fixed order below. The selection column is the rule of thumb; see the note after the table.
+130 effects in 21 categories, applied in the fixed order below. The selection column is the rule of thumb; see the note after the table.
 
 | Order | Category | Section | Count | What it does | Selection |
 |------:|----------|---------|------:|--------------|-----------|
@@ -469,19 +469,20 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 | 5 | Local contrast | `[local_contrast]` | 1 | per-pixel "pop" | single |
 | 6 | Blur | `[blur]` | 5 | creative / soften | pick one |
 | 7 | Image quality | `[image_quality]` | 3 | deband, bloom, lens flare | combinable |
-| 8 | Temporal | `[temporal]` | 22 | frame blending / TAA | **one primary** (guards auto) |
-| 9 | Exposure | `[exposure]` | 1 | pre-tonemap exposure | single |
-| 10 | Tonemapping | `[tonemapping]` | 8 | HDR → SDR curves | **pick one** |
-| 11 | White balance | `[white_balance]` | 3 | colour temperature | **pick one** |
-| 12 | Colour grading | `[color_grading]` | 8 | grade / saturation / curves | combinable |
-| 13 | Channel curves | `[channel_curves]` | 3 | per-channel S-curves | combinable |
-| 14 | Colour balance | `[color_balance]` | 1 | teal / orange tint | single |
-| 15 | Selective colour | `[selective_color]` | 3 | per-channel saturation | combinable |
-| 16 | Stylization | `[stylization]` | 9 | creative looks | mostly pick one |
+| 8 | Exposure | `[exposure]` | 1 | pre-tonemap exposure | single |
+| 9 | Tonemapping | `[tonemapping]` | 8 | HDR → SDR curves | **pick one** |
+| 10 | White balance | `[white_balance]` | 3 | colour temperature | **pick one** |
+| 11 | Colour grading | `[color_grading]` | 8 | grade / saturation / curves | combinable |
+| 12 | Channel curves | `[channel_curves]` | 3 | per-channel S-curves | combinable |
+| 13 | Colour balance | `[color_balance]` | 1 | teal / orange tint | single |
+| 14 | Selective colour | `[selective_color]` | 3 | per-channel saturation | combinable |
+| 15 | Stylization | `[stylization]` | 9 | creative looks | mostly pick one |
+| 16 | Toon | `[toon]` | 5 | anime / cartoon rendering | combinable |
 | 17 | Accessibility | `[accessibility]` | 6 | CVD simulate / correct | pick one |
 | 18 | Inline | `[inline]` | 7 | grain, vignette, letterbox… | stackable |
 | 19 | Hardware simulation | `[hardware_simulation]` | 17 | Console GPU sims + CRT / OLED / VHS | one console + one display |
-| 20 | Overlay (HUD) | `[overlay]` | 2 | FPS, crosshair | combinable |
+| 20 | Temporal | `[temporal]` | 22 | frame blending / TAA | **one primary** (guards auto) |
+| 21 | Overlay (HUD) | `[overlay]` | 2 | FPS, crosshair | combinable |
 
 \* Sharpeners combine (e.g. one sharpener + `midtone_clarity`), but stacking multiple *strong* sharpeners produces halos.
 
@@ -489,7 +490,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 > **Enable at most one effect per category unless noted otherwise.** Dont run two tonemappers or two AA methods. For temporal, pick one primary mode; a fused stabilizer (`convergent_detail_recovery`) activates automatically whenever any temporal mode is enabled. For hardware simulation, pick one console sim and optionally one display sim.
 
 > [!NOTE]
-> Combining a temporal mode with a hardware sim is supported but the history texture captures the post-sim image; TAA reads PS1 / CRT distorted history on the next frame. This produces a "weird but not broken" look. If you want clean TAA, dont stack a sim on top.
+> Combining a temporal mode with a hardware sim is fully supported: temporal runs *after* all grading and hardware sim, so every mode compares like with like history always matches the fully processed frame, and exposure, tonemapping, and display masks can never pulse through the feedback loop. The time-varying slivers (CRT brightness pulse, VHS noise and dropout) apply after temporal smoothing, so they flicker without entering history.
 
 <details>
 <summary><b>1. Geometric</b> UV warps (12)</summary>
@@ -576,38 +577,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>8. Temporal</b> one primary, guards automatic (22)</summary>
-
-22 primary frame-blending modes. A fused stabilizer (`convergent_detail_recovery`) activates automatically whenever any temporal mode is enabled; it gates history influence on large per-pixel changes (acting as a lightweight disocclusion guard) and pulls the current frame toward the converged history to recover detail. Ordered roughly simplest to most sophisticated.
-
-| Effect | Description |
-|--------|-------------|
-| `neighborhood_clamp_aa` | TAA, neighbourhood min / max clamp |
-| `motion_reject_denoise` | Motion-gated accumulation |
-| `motion_detect_blur` | Temporal motion blur |
-| `constant_blend_smooth` | 50/50 blend (baseline) |
-| `shutter_angle_smooth` | 180° camera shutter simulation |
-| `spline_interp_smooth` | Cubic Hermite temporal reconstruction |
-| `variance_decay_smooth` | Variance-gated IIR filter |
-| `dualrate_smooth` | Dual-rate adaptive blend |
-| `luminance_gate_smooth` | Smooth dark areas more (scotopic vision) |
-| `contrast_gate_smooth` | Smooth low-contrast areas more |
-| `gradient_gate_smooth` | Edge-aware, strong single anti-ghosting technique |
-| `sigma_clip_smooth` | Variance clipping (modern TAA core, Salvi 2016) |
-| `mitchell_kernel_smooth` | Mitchell–Netravali kernel + temporal |
-| `ycocg_clip_smooth` | YCoCg AABB clamp, the technique at the core of FSR 2 |
-| `bilateral_history_smooth` | Bilateral filter applied in time |
-| `perceptual_chroma_smooth` | YCbCr, aggressive chroma smoothing |
-| `frequency_split_smooth` | Low / high frequency band split blend |
-| `horn_schunck_smooth` | Optical-flow warp (Horn & Schunck 1981) |
-| `convergent_accumulate` | Detail accumulation, inspired by the principle behind DLSS 2 |
-| `dualwarp_flow_smooth` | Dual-warp interpolation, inspired by FSR 3 frame generation |
-| `variance_flow_accumulate` | Motion-compensated, triple-gated, inspired by the research behind DLSS 2 |
-| `edge_reconstruct_smooth` | Edge-directed reconstruction, inspired by XeSS DP4a path |
-</details>
-
-<details>
-<summary><b>9. Exposure</b> (1)</summary>
+<summary><b>8. Exposure</b> (1)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -615,7 +585,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>10. Tonemapping</b> pick one (8)</summary>
+<summary><b>9. Tonemapping</b> pick one (8)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -630,7 +600,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>11. White balance</b> pick one (3)</summary>
+<summary><b>10. White balance</b> pick one (3)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -640,7 +610,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>12. Colour grading</b> combinable (8)</summary>
+<summary><b>11. Colour grading</b> combinable (8)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -655,7 +625,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>13. Channel curves</b> combinable (3)</summary>
+<summary><b>12. Channel curves</b> combinable (3)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -665,7 +635,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>14. Colour balance</b> (1)</summary>
+<summary><b>13. Colour balance</b> (1)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -673,7 +643,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>15. Selective colour</b> combinable (3)</summary>
+<summary><b>14. Selective colour</b> combinable (3)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -683,7 +653,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 </details>
 
 <details>
-<summary><b>16. Stylization</b> mostly pick one (9)</summary>
+<summary><b>15. Stylization</b> mostly pick one (9)</summary>
 
 | Effect | Description |
 |--------|-------------|
@@ -696,6 +666,20 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 | `midpoint_contrast` | Simple contrast boost |
 | `color_invert` | Negative image |
 | `luminance_grayscale` | BT.709 grayscale |
+</details>
+
+<details>
+<summary><b>16. Toon</b> anime / cartoon (5)</summary>
+
+Anime and cartoon rendering. `kuwahara_paint` is configured here but executes early in the spatial chain (right after denoise), so AA, sharpening, and grading operate on the flattened image. `cel_shade`, `manga_screentone`, and `crosshatch_shade` execute in the deterministic colour stage after stylization. `ink_outline` runs last of the toon effects, just before temporal smoothing, so lines stay on top of cel bands and screentone and outlined edges reject history for free anti-ghosting. All five are deterministic (no time, no random), so temporal history stays aligned.
+
+| Effect | Description |
+|--------|-------------|
+| `kuwahara_paint` | Kuwahara painterly filter, lowest-variance quadrant mean (flatten regions, keep edges sharp) |
+| `cel_shade` | Luminance band quantization, the classic cel-shaded look |
+| `manga_screentone` | 45° halftone dots growing in shadows (manga print screentone) |
+| `crosshatch_shade` | Diagonal pen hatching, crossed in deep shadow |
+| `ink_outline` | Dark ink lines on strong RGB gradients (catches hue edges luma detection misses) |
 </details>
 
 <details>
@@ -714,7 +698,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 <details>
 <summary><b>18. Inline</b> stackable (7)</summary>
 
-Lens and film effects applied after colour grading, before hardware simulation. These belong to the source image the virtual monitor receives.
+Per-pixel lens and film effects, split across the pipeline. The light-bleed members (`chromatic_aberration`, `red_halation`, `anamorphic_streak`) run before tonemapping, where light scatter physically happens (`chromatic_aberration` at the master fetch). The frame members (`radial_vignette`, `cinematic_letterbox`, `ordered_dither`) run in the deterministic colour stage. `gaussian_grain` applies after temporal smoothing, so the animated grain never enters history.
 
 | Effect | Description |
 |--------|-------------|
@@ -730,7 +714,7 @@ Lens and film effects applied after colour grading, before hardware simulation. 
 <details>
 <summary><b>19. Hardware simulation</b> one console + one display (17)</summary>
 
-Hardware sims act as the **display device** showing the finished image. AA and sharpen run before the sim so they see the ideal frame.
+Hardware sims act as the **display device** showing the finished image. AA and sharpen run before the sim so they see the ideal frame; the deterministic UV halves (CRT barrel, VHS ripple, console pixel grids) run in the geometric stage, the colour / mask / quantize halves run in the deterministic colour stage, and the time-varying slivers (CRT brightness pulse, VHS noise and dropout) apply after temporal smoothing so they never enter history.
 
 **Console GPU simulation** (pick one):
 
@@ -761,9 +745,40 @@ Hardware sims act as the **display device** showing the finished image. AA and s
 </details>
 
 <details>
-<summary><b>20. Overlay (HUD)</b> combinable (2)</summary>
+<summary><b>20. Temporal</b> one primary, guards automatic (22)</summary>
 
-Overlays render after all processing (temporal, colour grading, accessibility, hardware sims) so they are never affected by other effects.
+22 primary frame-blending modes. A fused stabilizer (`convergent_detail_recovery`) activates automatically whenever any temporal mode is enabled; it gates history influence on large per-pixel changes (acting as a lightweight disocclusion guard) and pulls the current frame toward the converged history to recover detail. Temporal runs after all grading and hardware sim, in final display space, so every mode compares like with like: heavy stylization no longer weakens the flow-based modes, and exposure or tonemap can never pulse through the history. Ordered roughly simplest to most sophisticated.
+
+| Effect | Description |
+|--------|-------------|
+| `neighborhood_clamp_aa` | TAA, neighbourhood min / max clamp |
+| `motion_reject_denoise` | Motion-gated accumulation |
+| `motion_detect_blur` | Temporal motion blur |
+| `constant_blend_smooth` | 50/50 blend (baseline) |
+| `shutter_angle_smooth` | 180° camera shutter simulation |
+| `spline_interp_smooth` | Cubic Hermite temporal reconstruction |
+| `variance_decay_smooth` | Variance-gated IIR filter |
+| `dualrate_smooth` | Dual-rate adaptive blend |
+| `luminance_gate_smooth` | Smooth dark areas more (scotopic vision) |
+| `contrast_gate_smooth` | Smooth low-contrast areas more |
+| `gradient_gate_smooth` | Edge-aware, strong single anti-ghosting technique |
+| `sigma_clip_smooth` | Variance clipping (modern TAA core, Salvi 2016) |
+| `mitchell_kernel_smooth` | Mitchell–Netravali kernel + temporal |
+| `ycocg_clip_smooth` | YCoCg AABB clamp, the technique at the core of FSR 2 |
+| `bilateral_history_smooth` | Bilateral filter applied in time |
+| `perceptual_chroma_smooth` | YCbCr, aggressive chroma smoothing |
+| `frequency_split_smooth` | Low / high frequency band split blend |
+| `horn_schunck_smooth` | Optical-flow warp (Horn & Schunck 1981) |
+| `convergent_accumulate` | Detail accumulation, inspired by the principle behind DLSS 2 |
+| `dualwarp_flow_smooth` | Dual-warp interpolation, inspired by FSR 3 frame generation |
+| `variance_flow_accumulate` | Motion-compensated, triple-gated, inspired by the research behind DLSS 2 |
+| `edge_reconstruct_smooth` | Edge-directed reconstruction, inspired by XeSS DP4a path |
+</details>
+
+<details>
+<summary><b>21. Overlay (HUD)</b> combinable (2)</summary>
+
+Overlays render after all processing (colour grading, accessibility, hardware sims, temporal) so they are never affected by other effects.
 
 | Effect | Description |
 |--------|-------------|
@@ -797,6 +812,15 @@ BONES_CONFIG="gradient_gate_smooth" bones -- ~/games/game
 # VHS found footage
 BONES_CONFIG="vhs_simulation" bones -- ~/games/game
 
+# Anime: painterly flatten + cel bands + ink lines
+BONES_CONFIG="kuwahara_paint;cel_shade;ink_outline" bones -- ~/games/game
+
+# Anime on a 90s TV
+BONES_CONFIG="cel_shade;ink_outline;crt_simulation" bones -- ~/games/game
+
+# Manga print: grayscale + screentone + crosshatch
+BONES_CONFIG="luminance_grayscale;manga_screentone;crosshatch_shade" bones -- ~/games/game
+
 # Colourblind correction (deuteranopia)
 BONES_CONFIG="deuteranopia_correct" bones -- ~/games/game
 
@@ -821,7 +845,7 @@ The cinematic example deliberately stacks several `[inline]` effects grain, vign
 - No multi-pass effects (e.g. advanced bloom with downsample chains). The single-pass discipline rules them out.
 - Per-object motion vectors (as in true DLSS) are approximated by optical flow from neighbouring pixels useful but not pixel-perfect on fast motion.
 - Fast motion can cause ghosting on some temporal modes; the automatic `convergent_detail_recovery` stabilizer includes a motion gate that softens history influence on large per-pixel changes to reduce it.
-- Combining a temporal mode with a hardware sim makes the history texture capture the post-sim image, which the next frame reads back through TAA; the result is stable but visually unusual.
+- Temporal smoothing runs in final display space, after grading and hardware sims: history always matches the fully processed frame, so deterministic sims stay temporally aligned, but temporal modes never see the pre-grade HDR signal.
 - Compute path requires `shaderStorageImageWriteWithoutFormat` and a swap format with `VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT`. Missing either silently falls back to fragment with a log line.
 - If postfx submission fails repeatedly on a swapchain (driver in a bad state, etc.), the layer disables itself on that swapchain after a few consecutive failures and logs a single line saying so. Recreating the swapchain (resize, fullscreen toggle) re enables postfx; restarting the game also clears the state. This prevents silent TDR loops at the cost of postfx silently stopping until the swapchain is rebuilt check `BONES_LOG=warn` (or `info`) if effects unexpectedly disappear.
 
@@ -831,6 +855,6 @@ The effect order is fixed and cannot be changed at runtime.
 
 Heavily inspired by existing postfx tools, but the ubershader implementation and the majority of the effect code were written from scratch (or ported from GLSL snippets in public-domain and open-source shader repositories).
 
-All 125 effect implementations are original or derived from well-known algorithms (FXAA by Timothy Lottes, CAS / RCAS from AMD GPUOpen, AgX, ACES, and others) under their respective licenses (mostly MIT / BSD). Full attribution and external license texts are in [dist.LICENSE](dist.LICENSE).
+All 130 effect implementations are original or derived from well-known algorithms (FXAA by Timothy Lottes, CAS / RCAS from AMD GPUOpen, AgX, ACES, and others) under their respective licenses (mostly MIT / BSD). Full attribution and external license texts are in [dist.LICENSE](dist.LICENSE).
 
 The project itself is released under the **GNU General Public License v3.0**, full text in [LICENSE](LICENSE).

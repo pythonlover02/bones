@@ -1,0 +1,30 @@
+    {
+        float fm = 4.0 * res_scale;
+        float fl = dot(c, LUMA_AVG);
+        float fx = lgrad_x * 0.5;
+        float fy = lgrad_y * 0.5;
+        float ft2 = fl - dot(history, LUMA_AVG);
+        float fd2 = fx * fx + fy * fy + 0.001;
+        vec2 ff = clamp(vec2(fx, fy) * (-ft2 / fd2), vec2(-fm), vec2(fm));
+        vec2 fw_uv = v_uv + ff * inv;
+        vec3 fa = texture(u_history, fw_uv).rgb;
+        vec3 fa_e = texture(u_history, fw_uv + vec2( inv.x, 0.0)).rgb;
+        vec3 fa_w = texture(u_history, fw_uv + vec2(-inv.x, 0.0)).rgb;
+        vec3 fa_n = texture(u_history, fw_uv + vec2(0.0,  inv.y)).rgb;
+        vec3 fa_s = texture(u_history, fw_uv + vec2(0.0, -inv.y)).rgb;
+        float fx_w = dot(fa_e - fa_w, LUMA_AVG) * 0.5;
+        float fy_w = dot(fa_n - fa_s, LUMA_AVG) * 0.5;
+        float rl = dot(fa, LUMA_AVG);
+        float rt = rl - fl;
+        float rd2 = fx_w * fx_w + fy_w * fy_w + 0.001;
+        vec2 rv = clamp(vec2(fx_w, fy_w) * (-rt / rd2), vec2(-fm), vec2(fm));
+        vec2 sum_flow = ff + rv;
+        float fc2 = 1.0 - clamp(dot(sum_flow, sum_flow) * 4.0, 0.0, 1.0);
+        vec2 fhf = ff * 0.5 * inv;
+        vec3 wc = grade(texture(u_input, v_uv - fhf).rgb, v_uv, frag_coord, res_scale);
+        vec3 wh = clamp(texture(u_history, v_uv + fhf).rgb, min(dmin_x, c), max(dmax_x, c));
+        vec3 dd = abs(wc - wh);
+        float ds = step(0.12, max(dd.r, max(dd.g, dd.b)));
+        vec3 dw_out = mix(mix(wc, wh, 0.6 * fc2), c, ds);
+        c = mix(c, dw_out, hist_valid);
+    }

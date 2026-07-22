@@ -1,0 +1,30 @@
+    {
+        const float KUW_EPS = 1e-7;
+        float l_c  = dot(c, LUMA_AVG);
+        float l_e  = dot(tap_1_0, LUMA_AVG);
+        float l_w  = dot(tap_m1_0, LUMA_AVG);
+        float l_n  = dot(tap_0_1, LUMA_AVG);
+        float l_s  = dot(tap_0_m1, LUMA_AVG);
+        float l_ne = dot(tap_1_1, LUMA_AVG);
+        float l_nw = dot(tap_m1_1, LUMA_AVG);
+        float l_se = dot(tap_1_m1, LUMA_AVG);
+        float l_sw = dot(tap_m1_m1, LUMA_AVG);
+        vec3 q_sw = (c + tap_m1_0 + tap_0_m1 + tap_m1_m1) * 0.25;
+        vec3 q_se = (c + tap_1_0 + tap_0_m1 + tap_1_m1) * 0.25;
+        vec3 q_nw = (c + tap_m1_0 + tap_0_1 + tap_m1_1) * 0.25;
+        vec3 q_ne = (c + tap_1_0 + tap_0_1 + tap_1_1) * 0.25;
+        float a_sw = (l_c + l_w + l_s + l_sw) * 0.25;
+        float a_se = (l_c + l_e + l_s + l_se) * 0.25;
+        float a_nw = (l_c + l_w + l_n + l_nw) * 0.25;
+        float a_ne = (l_c + l_e + l_n + l_ne) * 0.25;
+        float v_sw = (l_c - a_sw) * (l_c - a_sw) + (l_w - a_sw) * (l_w - a_sw) + (l_s - a_sw) * (l_s - a_sw) + (l_sw - a_sw) * (l_sw - a_sw);
+        float v_se = (l_c - a_se) * (l_c - a_se) + (l_e - a_se) * (l_e - a_se) + (l_s - a_se) * (l_s - a_se) + (l_se - a_se) * (l_se - a_se);
+        float v_nw = (l_c - a_nw) * (l_c - a_nw) + (l_w - a_nw) * (l_w - a_nw) + (l_n - a_nw) * (l_n - a_nw) + (l_nw - a_nw) * (l_nw - a_nw);
+        float v_ne = (l_c - a_ne) * (l_c - a_ne) + (l_e - a_ne) * (l_e - a_ne) + (l_n - a_ne) * (l_n - a_ne) + (l_ne - a_ne) * (l_ne - a_ne);
+        float v_mn = min(min(v_sw, v_se), min(v_nw, v_ne)) + KUW_EPS;
+        float w_sw = step(v_sw, v_mn);
+        float w_se = step(v_se, v_mn);
+        float w_nw = step(v_nw, v_mn);
+        float w_ne = step(v_ne, v_mn);
+        c = (q_sw * w_sw + q_se * w_se + q_nw * w_nw + q_ne * w_ne) / max(w_sw + w_se + w_nw + w_ne, 1.0);
+    }

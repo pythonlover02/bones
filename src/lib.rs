@@ -10,7 +10,7 @@ mod effect;
 mod shader;
 mod watch;
 mod launcher;
-mod vk;
+mod vulkan;
 
 pub use env::process_args;
 pub use launcher::run_launcher;

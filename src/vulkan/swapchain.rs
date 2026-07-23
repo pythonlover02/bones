@@ -821,18 +821,23 @@ fn build_fx_resources(dev: &VkDevState, st: &VkSwapState, present_family: u32) -
     }
 }
 
+fn shaders_pending() -> bool {
+    GENERATION.load(Ordering::Relaxed) == 0
+}
+
 pub(crate) fn ensure_fx(dev: &VkDevState, st: &mut VkSwapState, present_family: u32) -> bool {
-    match st.fx.is_some() {
-        true => true,
-        false => match build_fx_resources(dev, st, present_family) {
+    match (st.fx.is_some(), shaders_pending()) {
+        (true, _) => true,
+        (false, true) => false,
+        (false, false) => match build_fx_resources(dev, st, present_family) {
             Ok(fx) => {
                 let mode_label = match fx.mode {
                     PostFxMode::Compute => "compute",
                     PostFxMode::Fragment => "fragment",
                 };
-                let queue_label = match fx.submit_family == present_family {
-                    true => "present queue",
-                    false => "async compute queue",
+                let queue_label = match fx.dispatch_family == fx.submit_family {
+                    true => "unified submission",
+                    false => "split async dispatch",
                 };
                 log_at(
                     LogLevel::Info,
@@ -939,19 +944,38 @@ fn check_pipeline_only(dev: &VkDevState, st: &mut VkSwapState) {
     }
 }
 
+fn fx_mismatches(fx: &PostFxResources, want_mode: PostFxMode, want_history: bool) -> bool {
+    fx.mode != want_mode || fx.needs_history != want_history
+}
+
+fn needs_full_rebuild(
+    st: &VkSwapState,
+    want_scale: f32,
+    want_mode: PostFxMode,
+    want_history: bool,
+) -> bool {
+    st.res_scale != want_scale
+        || st
+            .fx
+            .as_ref()
+            .map(|fx| fx_mismatches(fx, want_mode, want_history))
+            .unwrap_or(false)
+}
+
 pub(crate) fn check_rebuild_pipeline(dev: &VkDevState, st: &mut VkSwapState) {
     let s = ensure_settings();
     let want_mode = choose_mode(dev, &s, st.view_format);
     let want_scale = s.res_scale;
     let want_history = temporal_enabled(&s, &REGISTRY);
-    let needs_full = st.res_scale != want_scale
-        || st.fx.as_ref().map(|fx| fx.mode) != Some(want_mode)
-        || st.fx.as_ref().map(|fx| fx.needs_history) != Some(want_history);
-
-    match needs_full {
+    match needs_full_rebuild(st, want_scale, want_mode, want_history) {
         true => apply_full_rebuild(dev, st, want_scale),
         false => check_pipeline_only(dev, st),
     }
+}
+
+fn stamp_command_buffers(dev: &VkDevState, bufs: &[vk::CommandBuffer]) {
+    bufs.iter()
+        .for_each(|cb| super::device::inherit_command_buffer_dispatch(dev.device.handle(), *cb));
 }
 
 fn create_submit_resources(
@@ -972,6 +996,7 @@ fn create_submit_resources(
         ..Default::default()
     };
     let cmd_bufs = unsafe { dev.device.allocate_command_buffers(&cbai) }.map_err(|_| ())?;
+    stamp_command_buffers(dev, &cmd_bufs);
     let semaphores = (0..count)
         .map(|_| unsafe { dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) })
         .collect::<Result<Vec<_>, _>>().map_err(|_| ())?;
@@ -1043,7 +1068,14 @@ pub(crate) fn ensure_submit_resources(
     primary_ok && dispatch_ok
 }
 
+fn call_device_wait_idle(dev: &VkDevState) {
+    unsafe {
+        let _ = dev.device.device_wait_idle();
+    }
+}
+
 fn destroy_submit_resources(dev: &VkDevState, r: VkSubmitResources) {
+    call_device_wait_idle(dev);
     unsafe {
         let _ = dev.device.wait_for_fences(&r.fences, true, FENCE_TIMEOUT_NS);
         r.fences.iter().for_each(|f| dev.device.destroy_fence(*f, None));
@@ -1156,12 +1188,14 @@ struct SwapAttempt {
     result: vk::Result,
     view_format: vk::Format,
     mutable: bool,
+    usable: bool,
 }
 
 fn attempt_swapchain_creation_plain(
     d: &VkDevState,
     dev_h: vk::Device,
     ci: &vk::SwapchainCreateInfoKHR,
+    original: &vk::SwapchainCreateInfoKHR,
     alloc: *const vk::AllocationCallbacks,
     out: *mut vk::SwapchainKHR,
 ) -> SwapAttempt {
@@ -1170,11 +1204,13 @@ fn attempt_swapchain_creation_plain(
             result: vk::Result::SUCCESS,
             view_format: ci.image_format,
             mutable: false,
+            usable: true,
         },
         _ => SwapAttempt {
-            result: try_create_swapchain_passthrough(d, dev_h, ci, alloc, out),
-            view_format: ci.image_format,
+            result: try_create_swapchain_passthrough(d, dev_h, original, alloc, out),
+            view_format: original.image_format,
             mutable: false,
+            usable: false,
         },
     }
 }
@@ -1183,6 +1219,7 @@ fn attempt_swapchain_creation(
     d: &VkDevState,
     dev_h: vk::Device,
     ci: &vk::SwapchainCreateInfoKHR,
+    original: &vk::SwapchainCreateInfoKHR,
     alloc: *const vk::AllocationCallbacks,
     out: *mut vk::SwapchainKHR,
 ) -> SwapAttempt {
@@ -1195,10 +1232,11 @@ fn attempt_swapchain_creation(
                 result: vk::Result::SUCCESS,
                 view_format: unorm,
                 mutable: true,
+                usable: true,
             },
-            _ => attempt_swapchain_creation_plain(d, dev_h, ci, alloc, out),
+            _ => attempt_swapchain_creation_plain(d, dev_h, ci, original, alloc, out),
         },
-        false => attempt_swapchain_creation_plain(d, dev_h, ci, alloc, out),
+        false => attempt_swapchain_creation_plain(d, dev_h, ci, original, alloc, out),
     }
 }
 
@@ -1288,13 +1326,17 @@ pub(crate) fn create_swapchain_with_fx(
     let concurrent = concurrent_families(d, &ci_families);
     let upgraded = upgrade_swapchain_sharing(d, ci_ref, &concurrent);
     let effective_ci = upgraded.as_ref().unwrap_or(ci_ref);
-    let attempt = attempt_swapchain_creation(d, dev, effective_ci, alloc, out);
-    match attempt.result {
-        vk::Result::SUCCESS => {
+    let attempt = attempt_swapchain_creation(d, dev, effective_ci, ci_ref, alloc, out);
+    match (attempt.result, attempt.usable) {
+        (vk::Result::SUCCESS, true) => {
             register_swap_state(d, dev, unsafe { *out }, effective_ci, &attempt, s.res_scale);
             vk::Result::SUCCESS
         }
-        e => e,
+        (vk::Result::SUCCESS, false) => {
+            log_at(LogLevel::Warn, "driver rejected swapchain usage upgrade, postfx disabled for this swapchain");
+            vk::Result::SUCCESS
+        }
+        (e, _) => e,
     }
 }
 

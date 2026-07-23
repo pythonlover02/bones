@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
@@ -16,7 +17,7 @@ use crate::config::Settings;
 use crate::consts::DEBOUNCE_MS;
 use crate::consts::EffectDef;
 use crate::consts::INOTIFY_BUF;
-use crate::consts::POLL_BLOCK;
+use crate::consts::POLL_INTERVAL_MS;
 use crate::consts::REGISTRY;
 use crate::effect::any_effect_enabled;
 use crate::logging::log_at;
@@ -27,6 +28,10 @@ use crate::shader::ShaderArtifacts;
 
 static NOTIFY_FD: OnceLock<i32> = OnceLock::new();
 static DIRTY: AtomicBool = AtomicBool::new(false);
+static BUILDING: AtomicBool = AtomicBool::new(false);
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static WATCHER: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
+static BUILDER: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 
 fn call_inotify_init() -> i32 {
     unsafe { libc::inotify_init1(libc::IN_NONBLOCK) }
@@ -69,23 +74,46 @@ fn poll_dirty() -> bool {
     DIRTY.swap(false, Ordering::Relaxed)
 }
 
-fn watch_loop(fd: i32) {
-    std::iter::repeat(()).for_each(|_| {
-        match has_events(call_poll_fd(fd, POLL_BLOCK)) {
-            true => {
-                call_inotify_drain_all(fd);
-                thread::sleep(Duration::from_millis(DEBOUNCE_MS));
-                call_inotify_drain_all(fd);
-                DIRTY.store(true, Ordering::Relaxed);
-            }
-            false => (),
+fn shutdown_requested() -> bool {
+    SHUTDOWN.load(Ordering::Relaxed)
+}
+
+fn watch_step(fd: i32) {
+    match has_events(call_poll_fd(fd, POLL_INTERVAL_MS)) {
+        true => {
+            call_inotify_drain_all(fd);
+            thread::sleep(Duration::from_millis(DEBOUNCE_MS));
+            call_inotify_drain_all(fd);
+            DIRTY.store(true, Ordering::Relaxed);
         }
-    });
+        false => (),
+    }
+}
+
+fn watch_loop(fd: i32) {
+    std::iter::repeat(())
+        .take_while(|_| !shutdown_requested())
+        .for_each(|_| watch_step(fd));
+}
+
+fn store_handle(slot: &Mutex<Option<thread::JoinHandle<()>>>, h: thread::JoinHandle<()>) {
+    match slot.lock() {
+        Ok(mut g) => *g = Some(h),
+        Err(_) => (),
+    }
+}
+
+fn take_handle(slot: &Mutex<Option<thread::JoinHandle<()>>>) -> Option<thread::JoinHandle<()>> {
+    slot.lock().ok().and_then(|mut g| g.take())
+}
+
+fn join_handle(h: thread::JoinHandle<()>) {
+    let _ = h.join();
 }
 
 fn start_watcher(fd: i32) {
     match fd_is_valid(call_inotify_watch(fd, &config_dir())) {
-        true => { thread::spawn(move || watch_loop(fd)); }
+        true => store_handle(&WATCHER, thread::spawn(move || watch_loop(fd))),
         false => log_at(LogLevel::Warn, "inotify add watch failed, hot reload disabled"),
     }
 }
@@ -110,17 +138,72 @@ fn apply_reload(s: Settings, a: ShaderArtifacts, reg: &[EffectDef]) {
     log_at(LogLevel::Info, "hot reload applied");
 }
 
+fn call_close_fd(fd: i32) {
+    unsafe { libc::close(fd) };
+}
+
+fn close_notify_fd() {
+    NOTIFY_FD
+        .get()
+        .copied()
+        .filter(|fd| fd_is_valid(*fd))
+        .into_iter()
+        .for_each(call_close_fd);
+}
+
+fn drain_threads() {
+    take_handle(&WATCHER).into_iter().for_each(join_handle);
+    take_handle(&BUILDER).into_iter().for_each(join_handle);
+}
+
+pub(crate) fn maybe_shutdown_watch(last_instance: bool) {
+    match last_instance {
+        true => {
+            SHUTDOWN.store(true, Ordering::Relaxed);
+            drain_threads();
+            close_notify_fd();
+        }
+        false => (),
+    }
+}
+
 pub(crate) fn setup_watch() {
     init_inotify();
 }
 
+fn try_begin_build() -> bool {
+    !shutdown_requested() && !BUILDING.swap(true, Ordering::Relaxed)
+}
+
+fn end_build() {
+    BUILDING.store(false, Ordering::Relaxed);
+}
+
+fn requeue_dirty() {
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
+fn run_reload_build() {
+    let s = read_config(&config_path(&profile_name()), &REGISTRY);
+    let a = build_shaders(&s, &REGISTRY);
+    apply_reload(s, a, &REGISTRY);
+    end_build();
+}
+
+fn spawn_reload_build() {
+    store_handle(&BUILDER, thread::spawn(run_reload_build));
+}
+
+fn begin_or_requeue() {
+    match try_begin_build() {
+        true => spawn_reload_build(),
+        false => requeue_dirty(),
+    }
+}
+
 pub(crate) fn maybe_reload() {
     match poll_dirty() {
-        true => {
-            let s = read_config(&config_path(&profile_name()), &REGISTRY);
-            let spv = build_shaders(&s, &REGISTRY);
-            apply_reload(s, spv, &REGISTRY);
-        }
+        true => begin_or_requeue(),
         false => (),
     }
 }

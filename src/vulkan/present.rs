@@ -8,6 +8,7 @@ use crate::logging::log_at;
 use crate::logging::LogLevel;
 use crate::timing::frame_time_fps;
 
+use super::device::devs_any;
 use super::device::VkDevState;
 use super::swapchain::check_rebuild_pipeline;
 use super::swapchain::ensure_fx;
@@ -182,11 +183,23 @@ fn barrier(
     );
 }
 
-fn record_history_clear(dev: &VkDevState, cb: vk::CommandBuffer, hist: vk::Image) {
+fn shader_read_stages(gfx: bool) -> vk::PipelineStageFlags {
+    match gfx {
+        true => vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
+        false => vk::PipelineStageFlags::COMPUTE_SHADER,
+    }
+}
+
+fn record_history_clear(
+    dev: &VkDevState,
+    cb: vk::CommandBuffer,
+    hist: vk::Image,
+    read_stages: vk::PipelineStageFlags,
+) {
     barrier(dev, cb, hist,
         vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE,
-        vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
+        vk::PipelineStageFlags::ALL_COMMANDS, vk::PipelineStageFlags::TRANSFER);
     let black = vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] };
     let range = vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR, level_count: 1, layer_count: 1, ..Default::default()
@@ -195,7 +208,7 @@ fn record_history_clear(dev: &VkDevState, cb: vk::CommandBuffer, hist: vk::Image
     barrier(dev, cb, hist,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
-        vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER);
+        vk::PipelineStageFlags::TRANSFER, read_stages);
 }
 
 fn make_blit_region(src: vk::Extent2D, dst: vk::Extent2D) -> vk::ImageBlit {
@@ -270,7 +283,7 @@ fn write_to_swap(
         (true, _) => call_copy_image(dev, cb, src, dst, dst_extent),
         (false, true) => match upscaled_img != vk::Image::null() {
             true => {
-                barrier(dev, cb, upscaled_img, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE, vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER);
+                barrier(dev, cb, upscaled_img, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE, vk::PipelineStageFlags::ALL_COMMANDS, vk::PipelineStageFlags::TRANSFER);
                 call_blit_image(dev, cb, src, upscaled_img, src_extent, dst_extent, filter);
                 barrier(dev, cb, upscaled_img, vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::TRANSFER_SRC_OPTIMAL, vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::TRANSFER_READ, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::TRANSFER);
                 call_copy_image(dev, cb, upscaled_img, dst, dst_extent);
@@ -367,9 +380,15 @@ fn extract_postfx_frame(
     })
 }
 
-fn maybe_record_history_init(dev: &VkDevState, cb: vk::CommandBuffer, hist: vk::Image, needed: bool) {
+fn maybe_record_history_init(
+    dev: &VkDevState,
+    cb: vk::CommandBuffer,
+    hist: vk::Image,
+    needed: bool,
+    read_stages: vk::PipelineStageFlags,
+) {
     match needed {
-        true => record_history_clear(dev, cb, hist),
+        true => record_history_clear(dev, cb, hist, read_stages),
         false => (),
     }
 }
@@ -378,8 +397,16 @@ fn record_swap_to_shader_read(dev: &VkDevState, cb: vk::CommandBuffer, img: vk::
     barrier(dev, cb, img,
         vk::ImageLayout::PRESENT_SRC_KHR, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         vk::AccessFlags::COLOR_ATTACHMENT_WRITE, vk::AccessFlags::SHADER_READ,
-        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        vk::PipelineStageFlags::ALL_COMMANDS,
         vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER);
+}
+
+fn record_swap_acquire_compute(dev: &VkDevState, cb: vk::CommandBuffer, img: vk::Image) {
+    barrier(dev, cb, img,
+        vk::ImageLayout::PRESENT_SRC_KHR, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        vk::AccessFlags::empty(), vk::AccessFlags::SHADER_READ,
+        vk::PipelineStageFlags::ALL_COMMANDS,
+        vk::PipelineStageFlags::COMPUTE_SHADER);
 }
 
 fn push_fragment_descriptors(
@@ -562,7 +589,7 @@ fn record_fragment_pass(dev: &VkDevState, frame: &PostfxFrame, push_bytes: &[u8]
     barrier(dev, cb, frame.tex_output,
         vk::ImageLayout::UNDEFINED, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         vk::AccessFlags::empty(), vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-        vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
+        vk::PipelineStageFlags::ALL_COMMANDS, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
     begin_fragment_pass(dev, frame);
     unsafe {
         dev.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, frame.pipeline);
@@ -599,12 +626,53 @@ fn dispatch_dims(extent: vk::Extent2D, wg_x: u32, wg_y: u32) -> (u32, u32) {
     (gx, gy)
 }
 
-fn record_compute_pass(dev: &VkDevState, frame: &PostfxFrame, push_bytes: &[u8]) {
+fn compute_output_barrier(frame: &PostfxFrame) -> BarrierDesc {
+    BarrierDesc {
+        image: frame.tex_output,
+        old_layout: vk::ImageLayout::GENERAL,
+        new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        src_access: vk::AccessFlags::SHADER_WRITE,
+        dst_access: vk::AccessFlags::TRANSFER_READ,
+        src_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+        dst_stage: vk::PipelineStageFlags::TRANSFER,
+    }
+}
+
+fn swap_to_transfer_barrier(frame: &PostfxFrame, read_stages: vk::PipelineStageFlags) -> BarrierDesc {
+    BarrierDesc {
+        image: frame.swap_image,
+        old_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        src_access: vk::AccessFlags::SHADER_READ,
+        dst_access: vk::AccessFlags::TRANSFER_WRITE,
+        src_stage: read_stages,
+        dst_stage: vk::PipelineStageFlags::TRANSFER,
+    }
+}
+
+fn compute_end_barriers(
+    frame: &PostfxFrame,
+    read_stages: vk::PipelineStageFlags,
+    with_swap: bool,
+) -> Vec<BarrierDesc> {
+    match with_swap {
+        true => vec![compute_output_barrier(frame), swap_to_transfer_barrier(frame, read_stages)],
+        false => vec![compute_output_barrier(frame)],
+    }
+}
+
+fn record_compute_pass(
+    dev: &VkDevState,
+    frame: &PostfxFrame,
+    push_bytes: &[u8],
+    read_stages: vk::PipelineStageFlags,
+    with_swap: bool,
+) {
     let cb = frame.cmd_buf;
     barrier(dev, cb, frame.tex_output,
         vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL,
         vk::AccessFlags::empty(), vk::AccessFlags::SHADER_WRITE,
-        vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COMPUTE_SHADER);
+        vk::PipelineStageFlags::ALL_COMMANDS, vk::PipelineStageFlags::COMPUTE_SHADER);
     let (gx, gy) = dispatch_dims(frame.fx_extent, frame.compute_x, frame.compute_y);
     unsafe {
         dev.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, frame.pipeline);
@@ -615,23 +683,7 @@ fn record_compute_pass(dev: &VkDevState, frame: &PostfxFrame, push_bytes: &[u8])
             vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
         dev.device.cmd_dispatch(cb, gx, gy, 1);
     }
-    emit_barriers(dev, cb, &[BarrierDesc {
-        image: frame.tex_output,
-        old_layout: vk::ImageLayout::GENERAL,
-        new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        src_access: vk::AccessFlags::SHADER_WRITE,
-        dst_access: vk::AccessFlags::TRANSFER_READ,
-        src_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
-        dst_stage: vk::PipelineStageFlags::TRANSFER,
-    }, BarrierDesc {
-        image: frame.swap_image,
-        old_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        src_access: vk::AccessFlags::SHADER_READ,
-        dst_access: vk::AccessFlags::TRANSFER_WRITE,
-        src_stage: vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
-        dst_stage: vk::PipelineStageFlags::TRANSFER,
-    }]);
+    emit_barriers(dev, cb, &compute_end_barriers(frame, read_stages, with_swap));
 }
 
 fn record_unified_commands(dev: &VkDevState, frame: &PostfxFrame, push_bytes: &[u8]) {
@@ -643,18 +695,40 @@ fn record_unified_commands(dev: &VkDevState, frame: &PostfxFrame, push_bytes: &[
     };
     unsafe { let _ = dev.device.begin_command_buffer(cb, &bi); }
 
-    maybe_record_history_init(dev, cb, frame.tex_history, frame.need_history_init);
+    maybe_record_history_init(dev, cb, frame.tex_history, frame.need_history_init, shader_read_stages(true));
     record_swap_to_shader_read(dev, cb, img);
 
     match frame.mode {
         PostFxMode::Fragment => record_fragment_pass(dev, frame, push_bytes),
-        PostFxMode::Compute => record_compute_pass(dev, frame, push_bytes),
+        PostFxMode::Compute => record_compute_pass(dev, frame, push_bytes, shader_read_stages(true), true),
     }
 
     write_to_swap(dev, cb, frame.tex_output, img, frame.tex_upscaled, frame.fx_extent, frame.extent, frame.can_blit, frame.filter);
     record_end_of_frame_transitions(dev, frame);
 
     unsafe { let _ = dev.device.end_command_buffer(cb); }
+}
+
+fn record_dispatch_history_copy(dev: &VkDevState, frame: &PostfxFrame, cb: vk::CommandBuffer) {
+    let read_stages = shader_read_stages(false);
+    barrier(dev, cb, frame.tex_history,
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        vk::AccessFlags::SHADER_READ, vk::AccessFlags::TRANSFER_WRITE,
+        read_stages,
+        vk::PipelineStageFlags::TRANSFER);
+    call_copy_image(dev, cb, frame.tex_output, frame.tex_history, frame.fx_extent);
+    barrier(dev, cb, frame.tex_history,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
+        vk::PipelineStageFlags::TRANSFER,
+        read_stages);
+}
+
+fn maybe_record_dispatch_history(dev: &VkDevState, frame: &PostfxFrame, cb: vk::CommandBuffer) {
+    match frame.needs_history {
+        true => record_dispatch_history_copy(dev, frame, cb),
+        false => (),
+    }
 }
 
 fn record_dispatch_only(dev: &VkDevState, frame: &PostfxFrame, push_bytes: &[u8]) {
@@ -666,32 +740,13 @@ fn record_dispatch_only(dev: &VkDevState, frame: &PostfxFrame, push_bytes: &[u8]
     };
     unsafe { let _ = dev.device.begin_command_buffer(cb, &bi); }
 
-    maybe_record_history_init(dev, cb, frame.tex_history, frame.need_history_init);
-    barrier(dev, cb, img,
-        vk::ImageLayout::PRESENT_SRC_KHR, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        vk::AccessFlags::COLOR_ATTACHMENT_WRITE, vk::AccessFlags::SHADER_READ,
-        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-        vk::PipelineStageFlags::COMPUTE_SHADER);
+    maybe_record_history_init(dev, cb, frame.tex_history, frame.need_history_init, shader_read_stages(false));
+    record_swap_acquire_compute(dev, cb, img);
 
     let dispatch_frame = PostfxFrame { cmd_buf: cb, ..*frame };
-    record_compute_pass(dev, &dispatch_frame, push_bytes);
+    record_compute_pass(dev, &dispatch_frame, push_bytes, shader_read_stages(false), false);
 
-    match frame.needs_history {
-        true => {
-            barrier(dev, cb, frame.tex_history,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::AccessFlags::SHADER_READ, vk::AccessFlags::TRANSFER_WRITE,
-                vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::TRANSFER);
-            call_copy_image(dev, cb, frame.tex_output, frame.tex_history, frame.fx_extent);
-            barrier(dev, cb, frame.tex_history,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER);
-        }
-        false => (),
-    }
+    maybe_record_dispatch_history(dev, frame, cb);
 
     unsafe { let _ = dev.device.end_command_buffer(cb); }
 }
@@ -711,7 +766,7 @@ fn record_blit_only(dev: &VkDevState, frame: &PostfxFrame) {
         new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         src_access: vk::AccessFlags::SHADER_READ,
         dst_access: vk::AccessFlags::TRANSFER_WRITE,
-        src_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+        src_stage: vk::PipelineStageFlags::ALL_COMMANDS,
         dst_stage: vk::PipelineStageFlags::TRANSFER,
     }]);
 
@@ -814,11 +869,12 @@ fn submit_single(
     cb: vk::CommandBuffer,
     done: vk::Semaphore,
     fence: vk::Fence,
+    wait_stage: vk::PipelineStageFlags,
     waits_in: Vec<vk::Semaphore>,
 ) -> Vec<vk::Semaphore> {
     let stages: Vec<vk::PipelineStageFlags> = waits_in
         .iter()
-        .map(|_| vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER)
+        .map(|_| wait_stage)
         .collect();
     let si = vk::SubmitInfo {
         wait_semaphore_count: waits_in.len() as u32,
@@ -857,6 +913,7 @@ fn submit_split(
         frame.dispatch_cmd_buf,
         frame.dispatch_semaphore,
         frame.dispatch_fence,
+        vk::PipelineStageFlags::ALL_COMMANDS,
         waits_in,
     );
     submit_single(
@@ -866,6 +923,7 @@ fn submit_split(
         frame.cmd_buf,
         frame.semaphore,
         frame.fence,
+        vk::PipelineStageFlags::ALL_COMMANDS,
         dispatch_signals,
     )
 }
@@ -877,7 +935,16 @@ fn submit_postfx(
     waits_in: Vec<vk::Semaphore>,
 ) -> Vec<vk::Semaphore> {
     match frame.split_async {
-        false => submit_single(dev, sc_raw, frame.submit_queue, frame.cmd_buf, frame.semaphore, frame.fence, waits_in),
+        false => submit_single(
+            dev,
+            sc_raw,
+            frame.submit_queue,
+            frame.cmd_buf,
+            frame.semaphore,
+            frame.fence,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            waits_in,
+        ),
         true => submit_split(dev, sc_raw, frame, waits_in),
     }
 }
@@ -949,6 +1016,19 @@ fn record_postfx_pass(
 
 pub(crate) fn call_real_queue_present(dev: &VkDevState, queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
     unsafe { (dev.swap_fp.queue_present_khr)(queue, info) }
+}
+
+pub(crate) fn run_vk_present_fallback(queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {
+    match devs_any() {
+        Some(d) => {
+            log_at(LogLevel::Warn, "present on untracked queue, forwarding without postfx");
+            call_real_queue_present(&d, queue, info)
+        }
+        None => {
+            log_at(LogLevel::Error, "present on untracked queue with no registered device, dropping frame");
+            vk::Result::SUCCESS
+        }
+    }
 }
 
 pub(crate) fn run_vk_present_chain(dev: &VkDevState, fam: u32, queue: vk::Queue, info: *const vk::PresentInfoKHR) -> vk::Result {

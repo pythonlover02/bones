@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::ffi::c_char;
 use std::ffi::c_void;
+use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem;
+use std::ptr;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
@@ -13,10 +15,13 @@ use ash::vk::Handle;
 use crate::config::ensure_settings;
 use crate::config::Settings;
 use crate::consts::REGISTRY;
+use crate::consts::DYNREN_EXTS;
 use crate::consts::EXT_DYN_RENDER;
 use crate::consts::EXT_MUTABLE_FMT;
 use crate::consts::EXT_PUSH_DESC;
 use crate::consts::EXT_SYNCHRONIZATION2;
+use crate::consts::FN_PRESENT_RECTANGLES;
+use crate::consts::MUTABLE_FMT_EXTS;
 use crate::logging::log_at;
 use crate::logging::LogLevel;
 use crate::shader::build_shaders;
@@ -83,6 +88,12 @@ pub(crate) fn devs_get(h: u64) -> Option<Arc<VkDevState>> {
         .and_then(|g| g.as_ref().and_then(|m| m.get(&h).cloned()))
 }
 
+pub(crate) fn devs_any() -> Option<Arc<VkDevState>> {
+    DEVS.read()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|m| m.values().next().cloned()))
+}
+
 pub(crate) fn devs_gdpa(h: u64) -> Option<vk::PFN_vkGetDeviceProcAddr> {
     DEVS.read()
         .ok()
@@ -141,6 +152,20 @@ fn ext_supported(list: &[String], name: &str) -> bool {
     list.iter().any(|s| s == name)
 }
 
+fn exts_all_supported(list: &[String], names: &[&str]) -> bool {
+    names.iter().all(|n| ext_supported(list, n))
+}
+
+fn phys_api_version(inst: &VkInstState, phys: vk::PhysicalDevice) -> u32 {
+    unsafe { inst.instance.get_physical_device_properties(phys) }.api_version
+}
+
+fn features2_usable(inst: &VkInstState, phys: vk::PhysicalDevice) -> bool {
+    inst.gpdp2
+        || (inst.api_version >= vk::API_VERSION_1_1
+            && phys_api_version(inst, phys) >= vk::API_VERSION_1_1)
+}
+
 fn query_wg_limits(inst: &VkInstState, phys: vk::PhysicalDevice) -> (u32, u32, u32) {
     let props = unsafe { inst.instance.get_physical_device_properties(phys) };
     let l = props.limits;
@@ -151,17 +176,27 @@ fn query_wg_limits(inst: &VkInstState, phys: vk::PhysicalDevice) -> (u32, u32, u
     )
 }
 
-fn query_extension_features(
-    inst: &VkInstState,
+fn call_features2_query(
+    fp: vk::PFN_vkGetPhysicalDeviceFeatures2,
     phys: vk::PhysicalDevice,
-) -> bool {
-    let mut dynren = vk::PhysicalDeviceDynamicRenderingFeaturesKHR::default();
-    let mut feats2 = vk::PhysicalDeviceFeatures2 {
-        p_next: &mut dynren as *mut _ as *mut c_void,
-        ..Default::default()
-    };
-    unsafe { inst.instance.get_physical_device_features2(phys, &mut feats2) };
-    dynren.dynamic_rendering == vk::TRUE
+    out: &mut vk::PhysicalDeviceFeatures2,
+) {
+    unsafe { fp(phys, out) };
+}
+
+fn query_dynren_feature(inst: &VkInstState, phys: vk::PhysicalDevice) -> bool {
+    match inst.features2_fp.filter(|_| features2_usable(inst, phys)) {
+        Some(fp) => {
+            let mut dynren = vk::PhysicalDeviceDynamicRenderingFeaturesKHR::default();
+            let mut feats2 = vk::PhysicalDeviceFeatures2 {
+                p_next: &mut dynren as *mut _ as *mut c_void,
+                ..Default::default()
+            };
+            call_features2_query(fp, phys, &mut feats2);
+            dynren.dynamic_rendering == vk::TRUE
+        }
+        None => false,
+    }
 }
 
 fn query_core_features(inst: &VkInstState, phys: vk::PhysicalDevice) -> vk::PhysicalDeviceFeatures {
@@ -204,6 +239,10 @@ fn add_if_chosen(chosen: bool, name: &str, exts: &mut Vec<CString>) {
     }
 }
 
+fn add_list_if_chosen(chosen: bool, names: &[&str], exts: &mut Vec<CString>) {
+    names.iter().for_each(|n| add_if_chosen(chosen, n, exts));
+}
+
 fn merged_features(
     original: Option<&vk::PhysicalDeviceFeatures>,
     storage_write_without_fmt: bool,
@@ -239,10 +278,20 @@ fn family_used_by_app(families: &[u32], idx: u32) -> bool {
     families.iter().any(|f| *f == idx)
 }
 
+fn push_unique(mut acc: Vec<u32>, f: u32) -> Vec<u32> {
+    match acc.contains(&f) {
+        true => acc,
+        false => {
+            acc.push(f);
+            acc
+        }
+    }
+}
+
 fn extract_app_queue_families(ci: &vk::DeviceCreateInfo) -> Vec<u32> {
     (0..ci.queue_create_info_count as usize)
         .map(|i| unsafe { (*ci.p_queue_create_infos.add(i)).queue_family_index })
-        .collect()
+        .fold(Vec::new(), push_unique)
 }
 
 fn find_async_compute_family(
@@ -283,13 +332,18 @@ fn assemble_queue_infos(
 }
 
 fn query_sync2_feature(inst: &VkInstState, phys: vk::PhysicalDevice) -> bool {
-    let mut f = vk::PhysicalDeviceSynchronization2FeaturesKHR::default();
-    let mut f2 = vk::PhysicalDeviceFeatures2 {
-        p_next: &mut f as *mut _ as *mut c_void,
-        ..Default::default()
-    };
-    unsafe { inst.instance.get_physical_device_features2(phys, &mut f2) };
-    f.synchronization2 == vk::TRUE
+    match inst.features2_fp.filter(|_| features2_usable(inst, phys)) {
+        Some(fp) => {
+            let mut f = vk::PhysicalDeviceSynchronization2FeaturesKHR::default();
+            let mut f2 = vk::PhysicalDeviceFeatures2 {
+                p_next: &mut f as *mut _ as *mut c_void,
+                ..Default::default()
+            };
+            call_features2_query(fp, phys, &mut f2);
+            f.synchronization2 == vk::TRUE
+        }
+        None => false,
+    }
 }
 
 fn maybe_chain<T, F>(use_it: bool, head: *const c_void, feat: &mut T, set_next: F) -> *const c_void
@@ -305,6 +359,65 @@ where
     }
 }
 
+fn non_null_base(p: *const c_void) -> Option<*mut vk::BaseOutStructure> {
+    match p.is_null() {
+        true => None,
+        false => Some(p as *mut vk::BaseOutStructure),
+    }
+}
+
+fn chain_find(p_next: *const c_void, want: vk::StructureType) -> Option<*mut vk::BaseOutStructure> {
+    std::iter::successors(non_null_base(p_next), |p| {
+        non_null_base(unsafe { (**p).p_next as *const c_void })
+    })
+    .find(|p| unsafe { (**p).s_type == want })
+}
+
+fn patch_dynren_node(node: *mut vk::BaseOutStructure) {
+    let f = node as *mut vk::PhysicalDeviceDynamicRenderingFeaturesKHR;
+    unsafe { (*f).dynamic_rendering = vk::TRUE };
+}
+
+fn patch_sync2_node(node: *mut vk::BaseOutStructure) {
+    let f = node as *mut vk::PhysicalDeviceSynchronization2FeaturesKHR;
+    unsafe { (*f).synchronization2 = vk::TRUE };
+}
+
+fn patch_vk13_dynren(node: *mut vk::BaseOutStructure) {
+    let f = node as *mut vk::PhysicalDeviceVulkan13Features;
+    unsafe { (*f).dynamic_rendering = vk::TRUE };
+}
+
+fn patch_vk13_sync2(node: *mut vk::BaseOutStructure) {
+    let f = node as *mut vk::PhysicalDeviceVulkan13Features;
+    unsafe { (*f).synchronization2 = vk::TRUE };
+}
+
+fn patch_features2_storage_write(node: *mut vk::BaseOutStructure) {
+    let f = node as *mut vk::PhysicalDeviceFeatures2;
+    unsafe { (*f).features.shader_storage_image_write_without_format = vk::TRUE };
+}
+
+fn maybe_patch_node<F>(chosen: bool, node: Option<*mut vk::BaseOutStructure>, patch: F)
+where
+    F: FnOnce(*mut vk::BaseOutStructure),
+{
+    match (chosen, node) {
+        (true, Some(n)) => patch(n),
+        (_, _) => (),
+    }
+}
+
+fn pick_features_ptr(
+    features2_node: Option<*mut vk::BaseOutStructure>,
+    merged: &vk::PhysicalDeviceFeatures,
+) -> *const vk::PhysicalDeviceFeatures {
+    match features2_node {
+        Some(_) => ptr::null(),
+        None => merged,
+    }
+}
+
 fn build_augmented(
     inst: &VkInstState,
     phys: vk::PhysicalDevice,
@@ -313,17 +426,23 @@ fn build_augmented(
 ) -> AugmentedDeviceCi {
     let original = unsafe { &*ci };
     let supported = supported_device_exts(inst, phys);
-    let dynren_feat_ok = query_extension_features(inst, phys);
+    let dynren_feat_ok = query_dynren_feature(inst, phys);
     let core = query_core_features(inst, phys);
     let (max_wg_x, max_wg_y, max_wg_inv) = query_wg_limits(inst, phys);
     let sync2_feat_ok = query_sync2_feature(inst, phys);
 
+    let features2_node = chain_find(original.p_next, vk::StructureType::PHYSICAL_DEVICE_FEATURES_2);
+    let vk13_node = chain_find(original.p_next, vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
+    let dynren_node = chain_find(original.p_next, vk::StructureType::PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR);
+    let sync2_node = chain_find(original.p_next, vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR);
+
     let app_queue_families = extract_app_queue_families(original);
     let async_family_candidate = find_async_compute_family(inst, phys, &app_queue_families);
 
-    let dynren_avail = ext_supported(&supported, EXT_DYN_RENDER) && dynren_feat_ok;
-    let pushdesc_avail = ext_supported(&supported, EXT_PUSH_DESC);
-    let mutable_avail = ext_supported(&supported, EXT_MUTABLE_FMT);
+    let features2_ok = features2_usable(inst, phys);
+    let dynren_avail = exts_all_supported(&supported, &DYNREN_EXTS) && dynren_feat_ok;
+    let pushdesc_avail = ext_supported(&supported, EXT_PUSH_DESC) && features2_ok;
+    let mutable_avail = exts_all_supported(&supported, &MUTABLE_FMT_EXTS);
     let use_mutable = log_opt(s.opt_mutable_fmt, mutable_avail, "mutable_format", EXT_MUTABLE_FMT);
     let storage_write_avail = core.shader_storage_image_write_without_format == vk::TRUE;
     let sync2_avail = ext_supported(&supported, EXT_SYNCHRONIZATION2) && sync2_feat_ok;
@@ -341,12 +460,18 @@ fn build_augmented(
     let async_family = match use_async_compute { true => async_family_candidate, false => None };
 
     let mut exts = original_ext_cstrings(original);
-    add_if_chosen(use_dynren, EXT_DYN_RENDER, &mut exts);
+    add_list_if_chosen(use_dynren, &DYNREN_EXTS, &mut exts);
     add_if_chosen(use_pushdesc, EXT_PUSH_DESC, &mut exts);
-    add_if_chosen(use_mutable, EXT_MUTABLE_FMT, &mut exts);
+    add_list_if_chosen(use_mutable, &MUTABLE_FMT_EXTS, &mut exts);
     add_if_chosen(use_sync2, EXT_SYNCHRONIZATION2, &mut exts);
 
     let ext_ptrs: Vec<*const c_char> = exts.iter().map(|c| c.as_ptr()).collect();
+
+    maybe_patch_node(use_dynren, dynren_node, patch_dynren_node);
+    maybe_patch_node(use_sync2, sync2_node, patch_sync2_node);
+    maybe_patch_node(use_dynren, vk13_node, patch_vk13_dynren);
+    maybe_patch_node(use_sync2, vk13_node, patch_vk13_sync2);
+    maybe_patch_node(use_storage_write, features2_node, patch_features2_storage_write);
 
     let mut dynren_feat = Box::new(vk::PhysicalDeviceDynamicRenderingFeaturesKHR {
         dynamic_rendering: vk::TRUE,
@@ -359,8 +484,8 @@ fn build_augmented(
     let enabled_features = Box::new(merged_features(original_features_ptr(original), use_storage_write));
 
     let mut head = original.p_next;
-    head = maybe_chain(use_dynren, head, dynren_feat.as_mut(), |f, n| f.p_next = n);
-    head = maybe_chain(use_sync2, head, sync2_feat.as_mut(), |f, n| f.p_next = n);
+    head = maybe_chain(use_dynren && dynren_node.is_none() && vk13_node.is_none(), head, dynren_feat.as_mut(), |f, n| f.p_next = n);
+    head = maybe_chain(use_sync2 && sync2_node.is_none() && vk13_node.is_none(), head, sync2_feat.as_mut(), |f, n| f.p_next = n);
 
     let priorities = vec![1.0f32];
     let extra_q = async_family.map(|f| extra_queue_ci(f, priorities.as_ptr()));
@@ -374,7 +499,7 @@ fn build_augmented(
         p_queue_create_infos: queue_infos.as_ptr(),
         enabled_extension_count: ext_ptrs.len() as u32,
         pp_enabled_extension_names: ext_ptrs.as_ptr(),
-        p_enabled_features: &*enabled_features,
+        p_enabled_features: pick_features_ptr(features2_node, enabled_features.as_ref()),
         ..Default::default()
     };
 
@@ -400,6 +525,17 @@ fn build_augmented(
         _sync2_feat: sync2_feat,
         _enabled_features: enabled_features,
     }
+}
+
+fn name_is_device_level(name: &CStr) -> bool {
+    name.to_str().map(|s| s != FN_PRESENT_RECTANGLES).unwrap_or(true)
+}
+
+fn load_swap_fp(gdpa: vk::PFN_vkGetDeviceProcAddr, handle: vk::Device) -> vk::KhrSwapchainFn {
+    vk::KhrSwapchainFn::load(|name| match name_is_device_level(name) {
+        true => unsafe { mem::transmute(gdpa(handle, name.as_ptr())) },
+        false => ptr::null(),
+    })
 }
 
 fn load_sync2_fp(gdpa: vk::PFN_vkGetDeviceProcAddr, handle: vk::Device, enabled: bool) -> Option<vk::KhrSynchronization2Fn> {
@@ -429,8 +565,26 @@ fn load_dynren_fp(gdpa: vk::PFN_vkGetDeviceProcAddr, handle: vk::Device, enabled
     }
 }
 
-fn fetch_async_queue(device: &ash::Device, family: Option<u32>) -> Option<vk::Queue> {
-    family.map(|f| unsafe { device.get_device_queue(f, 0) })
+pub(crate) fn inherit_device_dispatch(device_handle: vk::Device, queue: vk::Queue) {
+    let src = device_handle.as_raw() as *const *const c_void;
+    let dst = queue.as_raw() as *mut *const c_void;
+    unsafe { *dst = *src };
+}
+
+pub(crate) fn inherit_command_buffer_dispatch(device_handle: vk::Device, cb: vk::CommandBuffer) {
+    let src = device_handle.as_raw() as *const *const c_void;
+    let dst = cb.as_raw() as *mut *const c_void;
+    unsafe { *dst = *src };
+}
+
+fn stamped_device_queue(device: &ash::Device, device_handle: vk::Device, family: u32) -> vk::Queue {
+    let q = unsafe { device.get_device_queue(family, 0) };
+    inherit_device_dispatch(device_handle, q);
+    q
+}
+
+fn fetch_async_queue(device: &ash::Device, device_handle: vk::Device, family: Option<u32>) -> Option<vk::Queue> {
+    family.map(|f| stamped_device_queue(device, device_handle, f))
 }
 
 fn register_device(
@@ -445,13 +599,11 @@ fn register_device(
     let mut inst_fp = inst.instance.fp_v1_0().clone();
     inst_fp.get_device_proc_addr = gdpa;
     let device = unsafe { ash::Device::load(&inst_fp, handle) };
-    let swap_fp = vk::KhrSwapchainFn::load(|name| unsafe {
-        mem::transmute(gdpa(handle, name.as_ptr()))
-    });
+    let swap_fp = load_swap_fp(gdpa, handle);
     let sync2_fp = load_sync2_fp(gdpa, handle, caps.sync2);
     let push_desc_fp = load_push_desc_fp(gdpa, handle, caps.pushdesc);
     let dynren_fp = load_dynren_fp(gdpa, handle, caps.dynren);
-    let async_compute_queue = fetch_async_queue(&device, caps.async_compute_family);
+    let async_compute_queue = fetch_async_queue(&device, handle, caps.async_compute_family);
     let mem_props = unsafe { inst.instance.get_physical_device_memory_properties(phys) };
     devs_put(
         handle.as_raw(),

@@ -28,7 +28,7 @@ pub(crate) const FLATPAK_RUN: &str = "run";
 pub(crate) const FLATPAK_INJECT: &str = "/usr/lib/extensions/vulkan/bones/bin/bones-flatpak";
 
 pub(crate) const CONFIG_SEP: char = ';';
-pub(crate) const POLL_BLOCK: i32 = -1;
+pub(crate) const POLL_INTERVAL_MS: i32 = 250;
 
 pub(crate) const RES_SCALE_KEY: &str = "resolution_scale";
 pub(crate) const OPT_DYNREN_KEY: &str = "optimize_dynamic_rendering";
@@ -49,6 +49,29 @@ pub(crate) const EXT_DYN_RENDER: &str = "VK_KHR_dynamic_rendering";
 pub(crate) const EXT_PUSH_DESC: &str = "VK_KHR_push_descriptor";
 pub(crate) const EXT_MUTABLE_FMT: &str = "VK_KHR_swapchain_mutable_format";
 pub(crate) const EXT_SYNCHRONIZATION2: &str = "VK_KHR_synchronization2";
+pub(crate) const EXT_GPDP2: &str = "VK_KHR_get_physical_device_properties2";
+pub(crate) const EXT_DEPTH_STENCIL_RESOLVE: &str = "VK_KHR_depth_stencil_resolve";
+pub(crate) const EXT_CREATE_RENDERPASS2: &str = "VK_KHR_create_renderpass2";
+pub(crate) const EXT_MULTIVIEW: &str = "VK_KHR_multiview";
+pub(crate) const EXT_MAINTENANCE2: &str = "VK_KHR_maintenance2";
+pub(crate) const EXT_IMAGE_FORMAT_LIST: &str = "VK_KHR_image_format_list";
+pub(crate) const EXT_SWAPCHAIN_BASE: &str = "VK_KHR_swapchain";
+pub(crate) const FN_PRESENT_RECTANGLES: &str = "vkGetPhysicalDevicePresentRectanglesKHR";
+
+pub(crate) const DYNREN_EXTS: [&str; 5] = [
+    EXT_DYN_RENDER,
+    EXT_DEPTH_STENCIL_RESOLVE,
+    EXT_CREATE_RENDERPASS2,
+    EXT_MULTIVIEW,
+    EXT_MAINTENANCE2,
+];
+
+pub(crate) const MUTABLE_FMT_EXTS: [&str; 4] = [
+    EXT_MUTABLE_FMT,
+    EXT_MAINTENANCE2,
+    EXT_IMAGE_FORMAT_LIST,
+    EXT_SWAPCHAIN_BASE,
+];
 
 pub(crate) const GENERAL_BOOL_KEYS: [&str; 6] = [
     OPT_DYNREN_KEY,

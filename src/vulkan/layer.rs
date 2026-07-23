@@ -18,6 +18,7 @@ use crate::logging::log_at;
 use crate::logging::LogLevel;
 use crate::util::cstr_to_str;
 use crate::watch::maybe_reload;
+use crate::watch::maybe_shutdown_watch;
 
 use super::device::*;
 use super::device::QueueBinding;
@@ -203,6 +204,7 @@ unsafe extern "system" fn bones_GetDeviceQueue(dev: vk::Device, qfam: u32, qidx:
     match devs_get(dev.as_raw()) {
         Some(d) => {
             let q = d.device.get_device_queue(qfam, qidx);
+            inherit_device_dispatch(dev, q);
             queue_dev_put(q.as_raw(), QueueBinding { device_raw: dev.as_raw(), family: qfam });
             *out = q;
         }
@@ -214,6 +216,7 @@ unsafe extern "system" fn bones_GetDeviceQueue2(dev: vk::Device, info: *const vk
     match devs_get(dev.as_raw()) {
         Some(d) => {
             let q = d.device.get_device_queue2(&*info);
+            inherit_device_dispatch(dev, q);
             queue_dev_put(q.as_raw(), QueueBinding { device_raw: dev.as_raw(), family: (*info).queue_family_index });
             *out = q;
         }
@@ -249,7 +252,8 @@ unsafe extern "system" fn vkCreateInstance(
 
 unsafe extern "system" fn vkDestroyInstance(inst: vk::Instance, alloc: *const vk::AllocationCallbacks) {
     let st = insts_get(inst.as_raw());
-    insts_del(inst.as_raw());
+    let last = insts_del(inst.as_raw());
+    maybe_shutdown_watch(last);
     match st {
         Some(s) => call_chain_destroy_instance(&s, inst, alloc),
         None => (),
@@ -311,7 +315,7 @@ unsafe extern "system" fn vkQueuePresentKHR(queue: vk::Queue, info: *const vk::P
     maybe_reload();
     match queue_owner(queue) {
         Some((d, fam)) => run_vk_present_chain(&d, fam, queue, info),
-        None => vk::Result::ERROR_DEVICE_LOST,
+        None => run_vk_present_fallback(queue, info),
     }
 }
 

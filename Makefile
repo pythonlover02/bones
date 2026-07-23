@@ -44,7 +44,8 @@ FLATPAK ?= flatpak
 FORCE_INSTALL ?= 0
 
 RUST_SOURCES := $(wildcard Cargo.toml Cargo.lock) \
-  $(shell find . -path ./target -prune -o -name '*.rs' -print 2>/dev/null)
+  $(shell find . -path ./target -prune -o \
+    \( -name '*.rs' -o -name '*.glsl' -o -name '*.vert' -o -name '*.toml' \) -print 2>/dev/null)
 
 ifneq ($(filter flatpak install flatpak-install,$(MAKECMDGOALS)),)
 RUST_SOURCES :=

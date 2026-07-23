@@ -10,7 +10,7 @@ Bones is a realtime post-processing layer for Vulkan games on Linux, written in 
 ### At a glance
 
 - **130 effects** across 21 categories: geometry, AA, sharpening, 22 temporal modes, toon / anime rendering, 9 console GPU simulations (PS1 through Xbox 360), CRT / OLED / VHS, colour grading, colourblind correction, more.
-- **One shader, one dispatch.** Effects are `#ifdef`-toggled in a single ubershader. VRAM is O(1) three textures total, regardless of how many effects you stack.
+- **One shader, one dispatch.** Only the effects you enable are assembled into the ubershader source; disabled effects are never compiled at all. VRAM is O(1) two textures total, regardless of how many effects you stack.
 - **Compute path by default**, fragment fallback. Compute skips the rasterizer for tighter scheduling and better extension composition; fragment kicks in automatically when the device doesnt support the storage-image features the compute path needs.
 - **Vulkan extension fast paths**: `VK_KHR_dynamic_rendering`, `VK_KHR_push_descriptor`, `VK_KHR_synchronization2`, `VK_KHR_swapchain_mutable_format`. Each is queried at device creation; missing pieces log a single line and the layer keeps running.
 - **Async compute**: when the compute path is active, Bones automatically discovers and utilizes a dedicated async compute queue if the device exposes one not used by the game. The compute dispatch runs on the async queue concurrently with the game next-frame rendering; the final blit to the swap image runs on the present queue, with a semaphore between them. Works at any `resolution_scale`.
@@ -90,7 +90,7 @@ At `vkQueuePresentKHR`, the layer:
 1. Samples the swap image directly through a per-image `ImageView` (no input copy).
 2. Runs the **ubershader** (compute by default, fragment when unsupported) into an offscreen `tex_output` at `fx_extent = swap_extent × resolution_scale`.
 3. Optionally samples a history texture for temporal effects.
-4. Copies `tex_output` to `tex_history` for the next frame, then blits it back to the swap image (linear filter when `resolution_scale < 1.0`, plain copy when 1.0).
+4. Writes `tex_output` back to the swap image: a plain copy at `resolution_scale = 1.0`, otherwise a blit (linear filter when the format advertises `SAMPLED_IMAGE_FILTER_LINEAR`, nearest otherwise). When a temporal mode is enabled, `tex_output` is also copied to `tex_history` for the next frame.
 
 The pipeline is built lazily when no effects are enabled, nothing is allocated. Enabling one via hot reload triggers the build on the next present.
 
@@ -105,7 +105,7 @@ Bones differentiates itself from ReShade-style postfx pipelines through a series
 
 ### Ubershader instead of pass chaining
 
-Traditional postfx tools chain N passes for N effects, ping-ponging between FBOs. Bones compiles every enabled effect into one large shader gated by `#ifdef ENABLE_<effect>`. The cost: longer first-run shader compile time. The win: when you stack 5+ effects, the bandwidth saved by not reading and writing a fullscreen render target between each effect is significant on bandwidth-bound GPUs (Steam Deck, mobile dGPUs, older discrete cards). VRAM stays at three textures regardless of effect count.
+Traditional postfx tools chain N passes for N effects, ping-ponging between FBOs. Bones concatenates the GLSL fragment for each enabled effect into one large shader in fixed pipeline order, and compiles that. There is no preprocessor gating and no dead code: a disabled effect never reaches the compiler. The cost: longer first-run shader compile time, and a recompile whenever the effect stack changes. The win: when you stack 5+ effects, the bandwidth saved by not reading and writing a fullscreen render target between each effect is significant on bandwidth-bound GPUs (Steam Deck, mobile dGPUs, older discrete cards). VRAM stays at three textures regardless of effect count.
 
 ### Compute by default, fragment fallback
 
@@ -146,6 +146,8 @@ When the device supports `VK_KHR_swapchain_mutable_format` (toggleable via `opti
 ### Lazy postfx allocation
 
 Effects → off means resources → not built. The layer registers with the swapchain but allocates nothing until the first present where at least one effect is enabled. Toggling effects on via hot reload triggers the lazy build transparently. This makes the layer essentially free to install a user can leave it active on every game and pay no cost on games where they dont use it.
+
+Shader compilation runs off the present thread, so with effects enabled at launch there is a short window (a second or so, longer with `compute = true` since both the compute and fragment variants are built) where frames present unmodified before postfx spins up. `BONES_LOG=info` logs a single line once the resources are built.
 
 ### Env-mode (full file bypass)
 
@@ -393,7 +395,7 @@ Pass `--` to separate launcher options from the command. Anything before `--` is
 
 ### Profiles
 
-A profile is a named config at `~/.config/bones/<name>-config.toml`. The default profile when no name is given is `bones` (`bones-config.toml`). Profile names are validated: names that are empty or contain path separators, `..`, or non-printable characters fall back to the default profile `bones` with a warning. Pass a name to load a different one:
+A profile is a named config at `~/.config/bones/<name>-config.toml`. The default profile when no name is given is `bones` (`bones-config.toml`). Profile names are validated: a name must be non-empty and consist entirely of printable ASCII, and must not contain path separators or `..`. Anything else (whitespace, control characters, non-ASCII) falls back to the default profile `bones` with a warning. Pass a name to load a different one:
 
 ```
 bones retro -- ~/games/retro-game   # loads ~/.config/bones/retro-config.toml
@@ -504,7 +506,7 @@ Any of these variables triggers env mode when set, even to an empty string. An e
 | `rotate_180` | Rotate 180° |
 | `rotate_270` | Rotate 270° clockwise |
 | `center_zoom` | 1.5× magnify from screen centre |
-| `polynomial_distort` | Brown–Conrady barrel lens distortion (k1 / k2) |
+| `polynomial_distort` | Brown–Conrady barrel lens distortion (single-term k1) |
 | `barrel_undistort` | Inverse barrel correction (straighten curves) |
 | `fisheye_warp` | Wide-angle fisheye projection (atan remap) |
 | `trapezoid_warp` | Perspective keystone (wider at bottom) |
@@ -833,9 +835,9 @@ The cinematic example deliberately stacks several `[inline]` effects grain, vign
 ## Performance & Limitations
 
 **Strengths:**
-- **VRAM**: O(1), only three textures (output, history, swap-image view) regardless of effect count, plus a small upscale staging image only when resolution scaling an sRGB swapchain.
+- **VRAM**: O(1), only two textures (output and history) regardless of effect count, plus a small upscale staging image only when resolution scaling an sRGB swapchain. Swap images are viewed in place, not copied.
 - **Dispatch / draw calls**: always one `vkCmdDispatch` on the compute path, one full-screen triangle on fragment.
-- **CPU overhead**: minimal descriptor sets pre-built, command buffers per swap image.
+- **CPU overhead**: minimal command buffers per swap image, and descriptors written inline via `VK_KHR_push_descriptor` when available, or pre-built descriptor sets when it is not.
 - **No input copy**: shader samples the swap image directly via per-image views.
 - **Lazy build**: zero allocation when no effects are enabled.
 
@@ -848,6 +850,8 @@ The cinematic example deliberately stacks several `[inline]` effects grain, vign
 - Temporal smoothing runs in final display space, after grading and hardware sims: history always matches the fully processed frame, so deterministic sims stay temporally aligned, but temporal modes never see the pre-grade HDR signal.
 - Compute path requires `shaderStorageImageWriteWithoutFormat` and a swap format with `VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT`. Missing either silently falls back to fragment with a log line.
 - If postfx submission fails repeatedly on a swapchain (driver in a bad state, etc.), the layer disables itself on that swapchain after a few consecutive failures and logs a single line saying so. Recreating the swapchain (resize, fullscreen toggle) re enables postfx; restarting the game also clears the state. This prevents silent TDR loops at the cost of postfx silently stopping until the swapchain is rebuilt check `BONES_LOG=warn` (or `info`) if effects unexpectedly disappear.
+
+- Bones adds `TRANSFER_SRC` / `TRANSFER_DST` / `SAMPLED` / `COLOR_ATTACHMENT` to the swapchain usage flags so it can read and write the swap images. These are core Vulkan 1.0 usage bits, but a surface is only required to support a subset of them. If the driver rejects the upgraded creation info, the layer retries with the application original parameters and disables postfx for that swapchain, logging a single warning. The game keeps running unmodified.
 
 The effect order is fixed and cannot be changed at runtime.
 

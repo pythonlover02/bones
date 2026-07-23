@@ -1169,6 +1169,7 @@ fn try_create_swapchain_plain(
             | vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST
             | vk::ImageUsageFlags::SAMPLED,
+        old_swapchain: vk::SwapchainKHR::null(),
         ..*ci
     };
     unsafe { (d.swap_fp.create_swapchain_khr)(dev_h, &upgraded, alloc, out) }
